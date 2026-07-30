@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#11151b">
+  <title>Trackpull</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/static/icons/icon-192.png">
+  <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="app">
+<div class="shell" v-cloak :class="layoutClass">
+
+  <header class="topbar">
+    <span class="brand">Trackpull</span>
+    <span class="health" :class="healthClass" :title="healthTitle"></span>
+    <button class="iconbtn" type="button" aria-label="Settings" @click="openSettings">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3"></circle>
+        <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.02a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h.02a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.02a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"></path>
+      </svg>
+    </button>
+  </header>
+
+  <form class="searchbar" @submit.prevent="search">
+    <input v-model="query" type="search" inputmode="search" enterkeyhint="search"
+           placeholder="Search a song..." autocomplete="off" autocapitalize="off">
+    <button type="submit" class="primary" :disabled="searching || !query.trim()">
+      {{ searching ? 'Searching' : 'Search' }}
+    </button>
+  </form>
+
+  <main class="results">
+    <p v-if="!searched && !results.length" class="hint">
+      Search for a song, check the duration, and grab it. The file lands in
+      the beets inbox; beets does the tagging and filing from there.
+    </p>
+    <p v-if="searched && !searching && !results.length" class="hint">No results.</p>
+
+    <article v-for="r in results" :key="r.video_id" class="card">
+      <img v-if="r.thumbnail_url" class="thumb" :src="r.thumbnail_url" alt="" loading="lazy">
+      <div v-else class="thumb thumb-blank"></div>
+      <div class="meta">
+        <span class="title" :title="r.raw_title">{{ r.title }}</span>
+        <span class="artist">{{ r.artists.join(', ') || 'Unknown artist' }}<template v-if="r.album"> &middot; {{ r.album }}</template></span>
+        <span class="duration">{{ fmtDuration(r.duration_seconds) }}</span>
+      </div>
+      <button class="grab primary" type="button" @click="grab(r)"
+              :disabled="grabbing[r.video_id]">
+        {{ grabbing[r.video_id] ? 'Queued' : 'Grab' }}
+      </button>
+    </article>
+  </main>
+
+  <div v-if="toast" class="toast" @click="toast=''">{{ toast }}</div>
+
+  <footer class="queuebar" @click="queueOpen = !queueOpen">
+    <span>{{ activeJobs.length }} active</span>
+    <span class="queuebar-right">{{ queueOpen ? 'Close' : 'Queue' }}</span>
+  </footer>
+
+  <section v-if="queueOpen" class="queuepanel">
+    <p v-if="!jobs.length" class="hint">No jobs yet.</p>
+    <article v-for="j in sortedJobs" :key="j.id" class="job">
+      <div class="job-line">
+        <span class="job-title">{{ j.title || j.video_id }}</span>
+        <span class="stage" :class="'stage-' + j.stage">{{ j.stage }}</span>
+      </div>
+      <div class="job-line job-sub">
+        <span v-if="j.artist" class="job-artist">{{ j.artist }}</span>
+        <span v-if="j.stage === 'downloading'" class="pct">{{ Math.round(j.progress) }}%</span>
+      </div>
+      <div v-if="!['done','failed'].includes(j.stage)" class="bar">
+        <div class="bar-fill" :style="{width: j.progress + '%'}"></div>
+      </div>
+      <p v-if="j.stage === 'failed'" class="error">{{ j.error }}</p>
+      <button v-if="j.stage === 'failed'" class="retry" type="button" @click="retry(j)">Retry</button>
+      <p v-if="j.stage === 'done'" class="handoff">Handed off to inbox</p>
+    </article>
+  </section>
+
+  <div v-if="settingsOpen" class="overlay" @click.self="settingsOpen = false">
+    <section class="panel">
+      <h2>Settings</h2>
+
+      <label>Layout
+        <select v-model="layout" @change="saveLayout">
+          <option value="auto">Auto (follow screen size)</option>
+          <option value="mobile">Mobile</option>
+          <option value="desktop">Desktop</option>
+        </select>
+      </label>
+
+      <label>Output format
+        <select v-model="draft.output_format">
+          <option value="opus">opus (default)</option>
+          <option value="m4a">m4a</option>
+          <option value="mp3">mp3</option>
+        </select>
+      </label>
+      <p class="note">
+        No FLAC or WAV: the source tops out around 160 kbps Opus / 256 kbps
+        AAC, so a lossless container would only be a bigger file that
+        misreports its own quality.
+      </p>
+
+      <label v-if="draft.output_format === 'mp3'">Bitrate (mp3 only)
+        <input v-model="draft.bitrate" type="text" inputmode="numeric" placeholder="192">
+      </label>
+
+      <label>Inbox path
+        <input v-model="draft.inbox" type="text" spellcheck="false">
+      </label>
+      <p class="note" v-if="health">
+        Inbox {{ health.inbox_writable ? 'is writable.' : 'problem: ' + health.inbox_problem }}
+      </p>
+
+      <label>Password (leave blank to keep current)
+        <input v-model="draft.new_password" type="password" autocomplete="new-password">
+      </label>
+
+      <p class="note" v-if="settings">
+        yt-dlp {{ settings.ytdlp_version }} &middot; Trackpull server
+        {{ health ? health.version : '' }}
+      </p>
+
+      <div class="panel-actions">
+        <button type="button" @click="settingsOpen = false">Cancel</button>
+        <button type="button" class="primary" @click="saveSettings">Save</button>
+      </div>
+    </section>
+  </div>
+
+  <div v-if="passwordNeeded" class="overlay">
+    <section class="panel">
+      <h2>Password required</h2>
+      <form @submit.prevent="submitPassword">
+        <label>Password
+          <input v-model="passwordInput" type="password" autocomplete="current-password">
+        </label>
+        <div class="panel-actions">
+          <button type="submit" class="primary">Unlock</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
+</div>
+</div>
+<script src="/static/vue.global.prod.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

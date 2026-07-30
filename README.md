@@ -10,8 +10,7 @@ no cover art, no library path construction and no lyrics — beets already
 does every one of those things better, and beets-flask already provides a
 mobile web UI for confirming its matches.
 
-Current status: Phase 2 (CLI plus web API). The UI and the Docker image
-follow in later phases.
+Current status: CLI, web API, web UI (PWA), and Docker image.
 
 ## What a grab does
 
@@ -57,6 +56,27 @@ Environment variables: `INBOX_PATH`, `TRACKPULL_FORMAT`,
 `TRACKPULL_BITRATE` (mp3 only), `TRACKPULL_COOKIES` (path to a cookies
 file for throttled or region-locked content), `TRACKPULL_SCRATCH`,
 `TRACKPULL_CONFIG` (state directory), `TRACKPULL_PASSWORD`.
+
+## Web UI
+
+`serve` also serves a single-page UI at the root: search with result
+cards (thumbnail, title, artist, album, prominent duration so a live
+version or ten-minute extended mix is visible before grabbing), a queue
+bar showing the active-download count that expands into the full queue,
+and a settings panel (format, bitrate, inbox path, password, layout,
+read-only yt-dlp version). Job state streams in live over SSE and the
+queue survives page reloads.
+
+The layout setting switches between three modes: Auto (follows screen
+size), Mobile (search field and primary action in the lower half of the
+screen for one-handed phone use), and Desktop (the same page in a
+max-width container with the search bar at the top). The choice is
+stored in the browser.
+
+The page is installable as a PWA (standalone display, maskable icons);
+a minimal service worker caches the shell only, never API responses.
+Vue 3 is vendored as a single file - no build step, no CDN dependency
+at runtime, so the app works on a LAN without internet access.
 
 ## Web API
 
