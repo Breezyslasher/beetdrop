@@ -144,6 +144,11 @@ createApp({
         if (previous.stage !== "done" && job.stage === "done") {
           this.showToast("Handed off to inbox: " + (job.title || job.video_id));
         }
+        // The inbox watcher flagged a grab that beets did not
+        // auto-import; it is waiting for review in beets-flask.
+        if (previous.inbox_state !== "review" && job.inbox_state === "review") {
+          this.showToast("Needs review in beets-flask: " + (job.title || job.video_id));
+        }
       } else {
         this.jobs.push(job);
       }

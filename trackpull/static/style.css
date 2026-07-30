@@ -13,6 +13,7 @@
   --accent: #4da3ff;
   --accent-press: #3186e4;
   --danger: #e5534b;
+  --warn: #e3b341;
   --ok: #4ac26b;
   --border: #2c3642;
   --radius: 10px;
@@ -216,6 +217,7 @@ input, select {
 
 .error { color: var(--danger); font-size: 14px; margin: 8px 0 6px; word-break: break-word; }
 .handoff { color: var(--ok); font-size: 14px; margin: 6px 0 0; }
+.handoff-review { color: var(--warn); font-size: 14px; margin: 6px 0 0; }
 .retry { min-height: 36px; padding: 0 14px; }
 
 /* -- overlays ------------------------------------------------------------ */
