@@ -1,8 +1,10 @@
-/* Minimal service worker: caches the app shell only, so the PWA opens
-   instantly from a home screen. API responses and the SSE stream are
-   never cached - job state and search results must always be live. */
+/* Service worker: NETWORK-FIRST for the app shell, cache as offline
+   fallback only. Cache-first served stale app.js against fresh HTML and
+   silently broke the UI; network-first can never mix versions. API
+   responses and the SSE stream are never cached - job state and search
+   results must always be live. */
 
-const CACHE = "trackpull-shell-v2";
+const CACHE = "trackpull-shell-v4";
 const SHELL = [
   "/",
   "/static/style.css",
@@ -32,8 +34,14 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   if (url.pathname.startsWith("/api/") || url.pathname === "/events") return;
   event.respondWith(
-    caches.match(event.request).then(
-      (cached) => cached || fetch(event.request)
-    )
+    fetch(event.request)
+      .then((response) => {
+        if (response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE).then((cache) => cache.put(event.request, copy));
+        }
+        return response;
+      })
+      .catch(() => caches.match(event.request))
   );
 });

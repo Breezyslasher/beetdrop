@@ -4,7 +4,6 @@
 
 const { createApp } = Vue;
 
-const LS_PASSWORD = "trackpull.password";
 const LS_LAYOUT = "trackpull.layout";
 const MOBILE_QUERY = "(max-width: 700px)";
 
@@ -13,11 +12,13 @@ createApp({
     return {
       query: "",
       searchType: "songs",
+      grabFormat: "",
       results: [],
       resultsType: "songs",
       searching: false,
       searched: false,
       grabbing: {},
+      updatingYtdlp: false,
 
       jobs: [],
       queueOpen: false,
@@ -27,9 +28,9 @@ createApp({
       settingsOpen: false,
       draft: {},
 
-      password: localStorage.getItem(LS_PASSWORD) || "",
       passwordNeeded: false,
       passwordInput: "",
+      passwordError: "",
 
       layout: localStorage.getItem(LS_LAYOUT) || "auto",
       mediaMobile: window.matchMedia(MOBILE_QUERY).matches,
@@ -69,8 +70,9 @@ createApp({
   methods: {
     async api(path, options = {}) {
       const headers = Object.assign({}, options.headers);
-      if (this.password) headers["X-Trackpull-Password"] = this.password;
       if (options.body) headers["Content-Type"] = "application/json";
+      // Auth rides an HttpOnly session cookie set by /api/login; the
+      // password itself is never kept in the browser.
       const response = await fetch(path, Object.assign({}, options, { headers }));
       if (response.status === 401) {
         this.passwordNeeded = true;
@@ -123,10 +125,12 @@ createApp({
     async grab(result, kind) {
       const id = kind === "album" ? result.browse_id : result.video_id;
       this.grabbing[id] = true;
+      const payload = { video_id: id, kind: kind };
+      if (this.grabFormat) payload.format = this.grabFormat;
       try {
         const job = await this.api("/api/grab", {
           method: "POST",
-          body: JSON.stringify({ video_id: id, kind: kind }),
+          body: JSON.stringify(payload),
         });
         this.upsertJob(job);
         this.showToast("Queued: " + result.title);
@@ -183,10 +187,8 @@ createApp({
 
     connectEvents() {
       if (this.es) this.es.close();
-      const url = this.password
-        ? "/events?password=" + encodeURIComponent(this.password)
-        : "/events";
-      this.es = new EventSource(url);
+      // Same-origin EventSource carries the session cookie by itself.
+      this.es = new EventSource("/events");
       this.es.addEventListener("job", (event) => {
         this.esDelay = 1000;
         this.upsertJob(JSON.parse(event.data));
@@ -231,8 +233,12 @@ createApp({
           body: JSON.stringify(update),
         });
         if (this.draft.new_password) {
-          this.password = this.draft.new_password;
-          localStorage.setItem(LS_PASSWORD, this.password);
+          // Changing the password invalidates every session including
+          // this one; log straight back in with the new password.
+          await this.api("/api/login", {
+            method: "POST",
+            body: JSON.stringify({ password: this.draft.new_password }),
+          });
           this.connectEvents();
         }
         this.settingsOpen = false;
@@ -247,13 +253,43 @@ createApp({
       localStorage.setItem(LS_LAYOUT, this.layout);
     },
 
-    submitPassword() {
-      this.password = this.passwordInput;
-      localStorage.setItem(LS_PASSWORD, this.password);
-      this.passwordInput = "";
-      this.passwordNeeded = false;
-      this.connectEvents();
-      this.refreshJobs();
+    async updateYtdlp() {
+      this.updatingYtdlp = true;
+      try {
+        const body = await this.api("/api/ytdlp/update", { method: "POST" });
+        if (body.restart_needed) {
+          this.showToast("yt-dlp " + body.installed_version +
+            " installed; restart the container to load it");
+        } else {
+          this.showToast("yt-dlp is already up to date (" + body.loaded_version + ")");
+        }
+      } catch (err) {
+        if (err.message !== "password required") this.showToast("Update failed: " + err.message);
+      } finally {
+        this.updatingYtdlp = false;
+      }
+    },
+
+    async submitPassword() {
+      this.passwordError = "";
+      try {
+        const response = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: this.passwordInput }),
+        });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          this.passwordError = body.detail || ("login failed (" + response.status + ")");
+          return;
+        }
+        this.passwordInput = "";
+        this.passwordNeeded = false;
+        this.connectEvents();
+        this.refreshJobs();
+      } catch (err) {
+        this.passwordError = "login failed: " + err.message;
+      }
     },
   },
 

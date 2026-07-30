@@ -32,6 +32,12 @@
               @click="setSearchType('songs')">Songs</button>
       <button type="button" :class="{active: searchType === 'albums'}"
               @click="setSearchType('albums')">Albums</button>
+      <select v-model="grabFormat" class="formatpick" aria-label="Format for grabs">
+        <option value="">Format: default</option>
+        <option value="opus">Format: opus</option>
+        <option value="m4a">Format: m4a</option>
+        <option value="mp3">Format: mp3</option>
+      </select>
     </div>
     <div class="searchrow">
       <input v-model="query" type="search" inputmode="search" enterkeyhint="search"
@@ -106,6 +112,10 @@
         <div class="bar-fill" :style="{width: j.progress + '%'}"></div>
       </div>
       <p v-if="j.stage === 'failed'" class="error">{{ j.error }}</p>
+      <details v-if="j.stage === 'failed' && j.log" class="joblog">
+        <summary>Log</summary>
+        <pre>{{ j.log }}</pre>
+      </details>
       <button v-if="j.stage === 'failed'" class="retry" type="button" @click="retry(j)">Retry</button>
       <p v-if="j.stage === 'done' && j.inbox_state === 'picked_up'" class="handoff">
         Picked up by beets
@@ -162,6 +172,16 @@
       <p class="note" v-if="settings">
         yt-dlp {{ settings.ytdlp_version }} &middot; Trackpull server
         {{ health ? health.version : '' }}
+        <template v-if="health"> &middot; {{ health.failures_last_hour }} failed in the last hour
+          &middot; {{ health.inbox_free_mb }} MB free</template>
+      </p>
+      <button type="button" @click="updateYtdlp" :disabled="updatingYtdlp">
+        {{ updatingYtdlp ? 'Updating yt-dlp...' : 'Update yt-dlp' }}
+      </button>
+      <p class="note">
+        A wave of failed grabs usually means YouTube changed something and
+        yt-dlp needs updating. The new version loads on the next container
+        restart.
       </p>
 
       <div class="panel-actions">
@@ -178,6 +198,7 @@
         <label>Password
           <input v-model="passwordInput" type="password" autocomplete="current-password">
         </label>
+        <p v-if="passwordError" class="error">{{ passwordError }}</p>
         <div class="panel-actions">
           <button type="submit" class="primary">Unlock</button>
         </div>

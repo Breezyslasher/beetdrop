@@ -7,6 +7,7 @@ settings API arrives with the web layer in phase 2.
 from __future__ import annotations
 
 import os
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -29,25 +30,40 @@ class Config:
     bitrate: str = field(default_factory=lambda: os.environ.get("TRACKPULL_BITRATE", "192"))
     cookies_file: str = field(default_factory=lambda: os.environ.get("TRACKPULL_COOKIES", ""))
     password: str = field(default_factory=lambda: os.environ.get("TRACKPULL_PASSWORD", ""))
+    # Refuse grabs when the inbox filesystem has less than this much free.
+    # Running out of disk mid-album otherwise surfaces as a confusing
+    # ffmpeg/yt-dlp error after the download already happened.
+    min_free_mb: int = field(default_factory=lambda: int(os.environ.get("TRACKPULL_MIN_FREE_MB", "512")))
 
     @property
     def db_path(self) -> Path:
         return self.config_dir / "trackpull.sqlite3"
 
 
-def inbox_problem(inbox: Path) -> str:
+def inbox_free_mb(inbox: Path) -> int:
+    try:
+        return shutil.disk_usage(inbox).free // (1024 * 1024)
+    except OSError:
+        return 0
+
+
+def inbox_problem(inbox: Path, min_free_mb: int = 0) -> str:
     """Empty string when the inbox is usable, otherwise the reason it is not."""
     if not inbox.is_dir():
         return "inbox path does not exist or is not a directory: %s" % inbox
     if not os.access(inbox, os.W_OK | os.X_OK):
         return "inbox path is not writable by uid %d: %s" % (os.geteuid(), inbox)
+    if min_free_mb > 0:
+        free = inbox_free_mb(inbox)
+        if free < min_free_mb:
+            return "inbox filesystem has %d MB free, below the %d MB minimum" % (free, min_free_mb)
     return ""
 
 
-def check_inbox(inbox: Path) -> None:
-    """Fail loudly if the inbox does not exist or is not writable by the
-    effective UID. A permissions error discovered after a download completes
-    is a bad experience and an easily avoided one."""
-    problem = inbox_problem(inbox)
+def check_inbox(inbox: Path, min_free_mb: int = 0) -> None:
+    """Fail loudly if the inbox is missing, unwritable by the effective
+    UID, or nearly out of disk. Any of these discovered after a download
+    completes is a bad experience and an easily avoided one."""
+    problem = inbox_problem(inbox, min_free_mb)
     if problem:
         raise InboxError(problem)

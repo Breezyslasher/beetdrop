@@ -25,13 +25,22 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import __version__
-from .config import SUPPORTED_FORMATS, Config, inbox_problem
+from .auth import (
+    LoginThrottle,
+    check_session_token,
+    hash_password,
+    is_hashed,
+    load_or_create_secret,
+    make_session_token,
+    verify_password,
+)
+from .config import SUPPORTED_FORMATS, Config, inbox_free_mb, inbox_problem
 from .db import Store
 from .download import ytdlp_version
 from .events import Broadcaster, sse_format
@@ -56,6 +65,13 @@ class SettingsUpdate(BaseModel):
     password: Optional[str] = None
 
 
+class LoginRequest(BaseModel):
+    password: str
+
+
+SESSION_COOKIE = "trackpull_session"
+
+
 def create_app(base_config: Optional[Config] = None) -> FastAPI:
     base = base_config or Config()
     store = Store(base.db_path)
@@ -76,6 +92,14 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
         return config
 
     manager = JobManager(store, broadcaster, effective_config)
+    secret = load_or_create_secret(base.config_dir)
+    throttle = LoginThrottle()
+
+    # A plaintext password stored by an earlier version is hashed in
+    # place on startup; it never needs to exist in plaintext again.
+    stored_settings = store.get_settings()
+    if stored_settings.get("password") and not is_hashed(stored_settings["password"]):
+        store.set_settings({"password": hash_password(stored_settings["password"])})
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -91,19 +115,73 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
 
     app = FastAPI(title="trackpull", version=__version__, lifespan=lifespan)
 
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        return response
+
+    def client_key(request: Request) -> str:
+        # Behind a Cloudflare tunnel every connection arrives from
+        # cloudflared, so the real client is in CF-Connecting-IP.
+        return (
+            request.headers.get("cf-connecting-ip")
+            or request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+            or (request.client.host if request.client else "unknown")
+        )
+
     async def require_password(request: Request) -> None:
         password = effective_config().password
         if not password:
             return
-        supplied = (
-            request.headers.get("x-trackpull-password")
-            or request.query_params.get("password")
-            or ""
-        )
-        if supplied != password:
-            raise HTTPException(status_code=401, detail="password required")
+        cookie = request.cookies.get(SESSION_COOKIE, "")
+        if cookie and check_session_token(cookie, secret, password):
+            return
+        # Header auth for scripts and curl. Failed attempts count toward
+        # the same throttle as login attempts. The password is never
+        # accepted in a query string - query strings end up in logs.
+        header = request.headers.get("x-trackpull-password", "")
+        if header:
+            key = client_key(request)
+            if throttle.retry_after(key):
+                raise HTTPException(status_code=429, detail="too many attempts; try later")
+            if verify_password(header, password):
+                throttle.record_success(key)
+                return
+            throttle.record_failure(key)
+        raise HTTPException(status_code=401, detail="password required")
 
     protected = Depends(require_password)
+
+    @app.post("/api/login")
+    async def api_login(body: LoginRequest, request: Request, response: Response):
+        password = effective_config().password
+        if not password:
+            return {"ok": True, "password_required": False}
+        key = client_key(request)
+        wait = throttle.retry_after(key)
+        if wait:
+            raise HTTPException(
+                status_code=429,
+                detail="too many attempts; try again in %d seconds" % wait,
+                headers={"Retry-After": str(wait)},
+            )
+        if not verify_password(body.password, password):
+            throttle.record_failure(key)
+            raise HTTPException(status_code=401, detail="wrong password")
+        throttle.record_success(key)
+        forwarded_proto = request.headers.get("x-forwarded-proto", "")
+        response.set_cookie(
+            SESSION_COOKIE,
+            make_session_token(secret, password),
+            max_age=30 * 86400,
+            httponly=True,
+            samesite="lax",
+            secure=(request.url.scheme == "https" or forwarded_proto == "https"),
+        )
+        return {"ok": True, "password_required": True}
 
     # -- endpoints -----------------------------------------------------------
 
@@ -157,21 +235,59 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
         if body.output_format is not None and body.output_format not in SUPPORTED_FORMATS:
             raise HTTPException(status_code=422, detail="format must be one of %s" % (SUPPORTED_FORMATS,))
         updates = {k: v for k, v in body.model_dump().items() if v is not None}
+        if updates.get("password"):
+            # Hashed at rest; changing it also invalidates every session,
+            # since the hash is part of the token signing key.
+            updates["password"] = hash_password(updates["password"])
         store.set_settings(updates)
         return await api_get_settings()
 
     @app.get("/api/health")
     async def api_health():
         config = effective_config()
-        problem = inbox_problem(config.inbox)
+        problem = inbox_problem(config.inbox, config.min_free_mb)
         return {
             "status": "ok" if not problem else "degraded",
             "inbox": str(config.inbox),
             "inbox_writable": not problem,
             "inbox_problem": problem,
+            "inbox_free_mb": inbox_free_mb(config.inbox),
+            "min_free_mb": config.min_free_mb,
             "ytdlp_version": ytdlp_version(),
             "version": __version__,
             "active_jobs": manager.active_count(),
+            # A wave of these usually means yt-dlp needs updating.
+            "failures_last_hour": store.count_failed_since(3600),
+        }
+
+    @app.post("/api/ytdlp/update", dependencies=[protected])
+    async def api_ytdlp_update():
+        """Update the installed yt-dlp package. The running process keeps
+        the already-imported version; a container restart loads the new
+        one, which the response says explicitly rather than pretending."""
+        loaded = ytdlp_version()
+
+        def upgrade():
+            import subprocess
+            import sys
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--no-cache-dir",
+                 "--upgrade", "yt-dlp"],
+                capture_output=True, text=True, timeout=300,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.strip()[-500:] or "pip failed")
+            from importlib.metadata import version
+            return version("yt-dlp")
+
+        try:
+            installed = await asyncio.to_thread(upgrade)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="update failed: %s" % exc)
+        return {
+            "loaded_version": loaded,
+            "installed_version": installed,
+            "restart_needed": installed != loaded,
         }
 
     @app.get("/events", dependencies=[protected])
@@ -203,20 +319,34 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
     # The shell is unauthenticated by design: the password guards the API,
     # and the page itself is what asks for the password. The service worker
     # must live at the root so its scope covers the whole app.
+    #
+    # Every shell asset is served Cache-Control: no-cache so browsers
+    # revalidate (cheap 304s via ETag) instead of heuristically caching -
+    # a stale app.js against a fresh index.html breaks the UI silently.
+
+    NO_CACHE = {"Cache-Control": "no-cache"}
 
     @app.get("/", include_in_schema=False)
     async def index():
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(STATIC_DIR / "index.html", headers=NO_CACHE)
 
     @app.get("/manifest.webmanifest", include_in_schema=False)
     async def manifest():
         return FileResponse(STATIC_DIR / "manifest.webmanifest",
-                            media_type="application/manifest+json")
+                            media_type="application/manifest+json",
+                            headers=NO_CACHE)
 
     @app.get("/sw.js", include_in_schema=False)
     async def service_worker():
-        return FileResponse(STATIC_DIR / "sw.js", media_type="text/javascript")
+        return FileResponse(STATIC_DIR / "sw.js", media_type="text/javascript",
+                            headers=NO_CACHE)
 
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    class RevalidatedStaticFiles(StaticFiles):
+        def file_response(self, *args, **kwargs):
+            response = super().file_response(*args, **kwargs)
+            response.headers["Cache-Control"] = "no-cache"
+            return response
+
+    app.mount("/static", RevalidatedStaticFiles(directory=str(STATIC_DIR)), name="static")
 
     return app

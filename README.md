@@ -160,10 +160,44 @@ Stages: queued, searching, downloading, extracting, tagging, moving,
 done, failed.
 
 Auth is an optional single shared password (set via settings or
-`TRACKPULL_PASSWORD`), supplied as an `X-Trackpull-Password` header or a
-`password` query parameter (for EventSource). `/api/health` stays open
-so container healthchecks work. No TLS: this is a LAN tool that sits
-behind whatever reverse proxy already exists.
+`TRACKPULL_PASSWORD`), hardened enough to sit behind a Cloudflare
+tunnel or other internet-facing proxy:
+
+- The password is stored as a salted PBKDF2 hash, never plaintext (a
+  plaintext password stored by an earlier version is hashed in place on
+  startup), and every comparison is constant-time.
+- Browsers log in once via `POST /api/login` and hold a signed HttpOnly
+  session cookie for 30 days; the password is never kept in the browser
+  and never appears in a query string (query strings end up in access
+  logs - the old `?password=` parameter is gone). Changing the password
+  invalidates every session.
+- Scripts and curl use the `X-Trackpull-Password` header.
+- Failed attempts are throttled per client (5 in 15 minutes, keyed by
+  `CF-Connecting-IP` behind Cloudflare), after which logins answer 429.
+- All responses carry nosniff/frame-deny/no-referrer headers, and shell
+  assets are served `no-cache` so a stale cached app.js can never be
+  mixed with fresh HTML.
+
+`/api/health` stays open so container healthchecks work. TLS is the
+tunnel or reverse proxy's job.
+
+## Operations
+
+- Jobs still queued when the process restarts simply run on startup;
+  only jobs that were mid-download are marked failed (retryable).
+- Grabs are refused up front when the inbox filesystem has less than
+  `TRACKPULL_MIN_FREE_MB` (default 512) free, and /api/health reports
+  the free space - running out of disk mid-album otherwise surfaces as
+  a confusing error after the download already happened.
+- /api/health reports failures_last_hour; a wave of failures usually
+  means YouTube changed something and yt-dlp needs updating. Settings
+  has an "Update yt-dlp" button (POST /api/ytdlp/update); the new
+  version loads on the next container restart, and the response says
+  so rather than pretending.
+- Failed jobs keep the last lines of yt-dlp output, shown as an
+  expandable log in the queue.
+- The format picker next to the search field overrides the output
+  format for individual grabs without touching the saved setting.
 
 FLAC and WAV are not offered: YouTube Music's source ceiling is roughly
 160 kbps Opus or 256 kbps AAC, so a lossless container would be a larger

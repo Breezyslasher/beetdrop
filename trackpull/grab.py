@@ -46,6 +46,7 @@ def run_grab(
     on_stage: Callable[[str], None] = _noop,
     on_progress: Callable[[float], None] = _noop,
     on_resolved: Callable[[Result], None] = _noop,
+    logger=None,
 ) -> GrabOutcome:
     fmt = fmt or config.output_format
     bitrate = bitrate or config.bitrate
@@ -78,6 +79,7 @@ def run_grab(
             cookies_file=config.cookies_file,
             progress_hook=progress_hook,
             postprocessor_hook=postprocessor_hook,
+            logger=logger,
         )
 
         on_stage("tagging")
@@ -118,6 +120,7 @@ def run_album_grab(
     on_progress: Callable[[float], None] = _noop,
     on_resolved: Callable[[str, str], None] = _noop,  # (album title, album artist)
     on_detail: Callable[[str], None] = _noop,
+    logger=None,
 ) -> AlbumGrabOutcome:
     """Grab a whole album: every playable track downloaded, seed-tagged
     with its track number, and delivered as ONE album folder in a single
@@ -167,6 +170,7 @@ def run_album_grab(
                 audio_path = download_audio(
                     track.video_id, track_dir, fmt=fmt, bitrate=bitrate,
                     cookies_file=config.cookies_file, progress_hook=progress_hook,
+                    logger=logger,
                 )
                 verify_audio(audio_path)
                 write_seed_tags(audio_path, SeedTags(
