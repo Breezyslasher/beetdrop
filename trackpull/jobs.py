@@ -21,8 +21,13 @@ from .download import LogCollector
 from .events import Broadcaster
 from .grab import failures_text, run_album_grab, run_grab
 
-MAX_CONCURRENT_DOWNLOADS = 2
+DEFAULT_CONCURRENCY = 2
 PROGRESS_MIN_INTERVAL = 0.5  # seconds between persisted progress updates
+
+
+class JobCancelled(Exception):
+    """Raised inside a worker when the user cancels the job; propagates
+    out through yt-dlp's hooks and the pipeline's callbacks."""
 
 # Handoff watching: a delivered folder that leaves the inbox was picked up
 # by beets; one still sitting there after the grace period was not
@@ -33,15 +38,18 @@ INBOX_REVIEW_AFTER = 300  # seconds in the inbox before flagging for review
 
 
 class JobManager:
-    def __init__(self, store: Store, broadcaster: Broadcaster, config_provider: Callable[[], Config]):
+    def __init__(self, store: Store, broadcaster: Broadcaster,
+                 config_provider: Callable[[], Config],
+                 max_workers: int = DEFAULT_CONCURRENCY):
         self._store = store
         self._broadcaster = broadcaster
         self._config_provider = config_provider
         self._executor = ThreadPoolExecutor(
-            max_workers=MAX_CONCURRENT_DOWNLOADS, thread_name_prefix="grab"
+            max_workers=max(1, min(4, max_workers)), thread_name_prefix="grab"
         )
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._sweep_task: Optional[asyncio.Task] = None
+        self._cancel_requested: set = set()
 
     def start(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -68,6 +76,8 @@ class JobManager:
             await asyncio.sleep(INBOX_SWEEP_INTERVAL)
             try:
                 self.sweep_inbox()
+                config = self._config_provider()
+                self._store.prune(config.keep_jobs, config.keep_days)
             except Exception:
                 pass  # a failed sweep just means the next one tries again
 
@@ -91,8 +101,23 @@ class JobManager:
     def active_count(self) -> int:
         return sum(
             1 for job in self._store.list_jobs()
-            if job["stage"] not in ("done", "failed")
+            if job["stage"] not in ("done", "failed", "cancelled")
         )
+
+    def cancel(self, job_id: str) -> Optional[dict]:
+        """Request cancellation. Queued jobs cancel before starting;
+        running jobs stop at their next progress or stage callback."""
+        job = self._store.get_job(job_id)
+        if job is None:
+            return None
+        if job["stage"] in ("done", "failed", "cancelled"):
+            return job
+        self._cancel_requested.add(job_id)
+        return job
+
+    def _checkpoint(self, job_id: str) -> None:
+        if job_id in self._cancel_requested:
+            raise JobCancelled()
 
     def enqueue(self, video_id: str, fmt: str = "", bitrate: str = "",
                 kind: str = "track") -> dict:
@@ -109,7 +134,7 @@ class JobManager:
         job = self._store.get_job(job_id)
         if job is None:
             return None
-        if job["stage"] == "failed":
+        if job["stage"] in ("failed", "cancelled"):
             job = self._update(job_id, stage="queued", progress=0.0, error="",
                                detail="", log="", failed_tracks="",
                                inbox_path="", inbox_state="")
@@ -132,15 +157,22 @@ class JobManager:
         job = self._store.get_job(job_id)
         if job is None:
             return
+        if job_id in self._cancel_requested:
+            # Cancelled while still queued.
+            self._cancel_requested.discard(job_id)
+            self._update(job_id, stage="cancelled", error="cancelled before start")
+            return
         config = self._config_provider()
         last_progress = {"at": 0.0, "value": -1.0}
         collector = LogCollector()
 
         def on_stage(stage: str) -> None:
+            self._checkpoint(job_id)
             collector.add("stage: %s" % stage)
             self._update(job_id, stage=stage)
 
         def on_progress(pct: float) -> None:
+            self._checkpoint(job_id)
             now = time.monotonic()
             if (now - last_progress["at"] < PROGRESS_MIN_INTERVAL
                     and pct - last_progress["value"] < 5.0 and pct < 100.0):
@@ -150,6 +182,7 @@ class JobManager:
             self._update(job_id, progress=round(pct, 1))
 
         def on_detail(text: str) -> None:
+            self._checkpoint(job_id)
             collector.add(text)
             self._update(job_id, detail=text)
 
@@ -207,10 +240,24 @@ class JobManager:
                              log=collector.text()[:20000],
                              inbox_path=str(outcome.inbox_path),
                              inbox_state="waiting")
-        except Exception as exc:
-            collector.add("ERROR: %s" % exc)
-            self._update(job_id, stage="failed", error=str(exc)[:2000],
+        except JobCancelled:
+            collector.add("cancelled by user")
+            self._update(job_id, stage="cancelled", error="cancelled by user",
                          log=collector.text()[:20000])
+        except Exception as exc:
+            if job_id in self._cancel_requested:
+                # yt-dlp can wrap the cancellation raised inside its
+                # hooks; a failure while cancellation was requested is a
+                # cancellation, not an error.
+                collector.add("cancelled by user")
+                self._update(job_id, stage="cancelled", error="cancelled by user",
+                             log=collector.text()[:20000])
+            else:
+                collector.add("ERROR: %s" % exc)
+                self._update(job_id, stage="failed", error=str(exc)[:2000],
+                             log=collector.text()[:20000])
+        finally:
+            self._cancel_requested.discard(job_id)
 
     # -- plumbing --------------------------------------------------------------
 

@@ -106,9 +106,9 @@
         <span v-if="j.artist" class="job-artist">{{ j.artist }}<template v-if="j.kind === 'album'"> &middot; album</template></span>
         <span v-if="j.stage === 'downloading'" class="pct">{{ Math.round(j.progress) }}%</span>
       </div>
-      <p v-if="j.detail && !['done','failed'].includes(j.stage)" class="job-detail">{{ j.detail }}</p>
+      <p v-if="j.detail && !['done','failed','cancelled'].includes(j.stage)" class="job-detail">{{ j.detail }}</p>
       <p v-if="j.detail && j.stage === 'done'" class="job-detail">{{ j.detail }}</p>
-      <div v-if="!['done','failed'].includes(j.stage)" class="bar">
+      <div v-if="!['done','failed','cancelled'].includes(j.stage)" class="bar">
         <div class="bar-fill" :style="{width: j.progress + '%'}"></div>
       </div>
       <p v-if="j.stage === 'failed'" class="error">{{ j.error }}</p>
@@ -116,7 +116,10 @@
         <summary>Log</summary>
         <pre>{{ j.log }}</pre>
       </details>
-      <button v-if="j.stage === 'failed'" class="retry" type="button" @click="retry(j)">Retry</button>
+      <button v-if="!['done','failed','cancelled'].includes(j.stage)"
+              class="retry" type="button" @click.stop="cancel(j)">Cancel</button>
+      <button v-if="['failed','cancelled'].includes(j.stage)"
+              class="retry" type="button" @click="retry(j)">Retry</button>
       <button v-if="j.stage === 'done' && j.kind === 'album' && j.failed_tracks"
               class="retry" type="button" @click="retry(j)">Retry failed tracks</button>
       <p v-if="j.stage === 'done' && j.inbox_state === 'picked_up'" class="handoff">
@@ -166,6 +169,26 @@
       <p class="note" v-if="health">
         Inbox {{ health.inbox_writable ? 'is writable.' : 'problem: ' + health.inbox_problem }}
       </p>
+
+      <label>Concurrent downloads
+        <select v-model="draft.concurrency">
+          <option :value="1">1</option>
+          <option :value="2">2 (default)</option>
+          <option :value="3">3</option>
+          <option :value="4">4</option>
+        </select>
+      </label>
+      <p class="note">Applies after a container restart.</p>
+
+      <label>Cookies (paste cookies.txt content for throttled or region-locked videos)
+        <textarea v-model="draft.cookies" rows="3" spellcheck="false"
+                  :placeholder="settings && settings.cookies_set
+                    ? 'Cookies are set - paste here to replace them'
+                    : 'Netscape cookies.txt format'"></textarea>
+      </label>
+      <button v-if="settings && settings.cookies_set" type="button" @click="clearCookies">
+        Clear cookies
+      </button>
 
       <label>Password (leave blank to keep current)
         <input v-model="draft.new_password" type="password" autocomplete="new-password">

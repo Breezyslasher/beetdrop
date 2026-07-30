@@ -81,7 +81,10 @@ createApp({
       if (!response.ok) {
         let detail = response.statusText;
         try { detail = (await response.json()).detail || detail; } catch (e) { /* not json */ }
-        throw new Error(detail);
+        const err = new Error(typeof detail === "string" ? detail : (detail.message || "request failed"));
+        err.status = response.status;
+        err.detail = detail;
+        throw err;
       }
       return response.json();
     },
@@ -122,11 +125,12 @@ createApp({
       }
     },
 
-    async grab(result, kind) {
+    async grab(result, kind, force) {
       const id = kind === "album" ? result.browse_id : result.video_id;
       this.grabbing[id] = true;
       const payload = { video_id: id, kind: kind };
       if (this.grabFormat) payload.format = this.grabFormat;
+      if (force) payload.force = true;
       try {
         const job = await this.api("/api/grab", {
           method: "POST",
@@ -136,7 +140,26 @@ createApp({
         this.showToast("Queued: " + result.title);
       } catch (err) {
         delete this.grabbing[id];
+        if (err.status === 409 && err.detail && err.detail.existing_job) {
+          const existing = err.detail.existing_job;
+          const when = new Date(existing.created_at * 1000).toLocaleString();
+          if (window.confirm(err.detail.message + "\n(" +
+              (existing.title || existing.id) + ", " + existing.stage + ", " + when +
+              ")\n\nGrab it again anyway?")) {
+            this.grab(result, kind, true);
+          }
+          return;
+        }
         if (err.message !== "password required") this.showToast("Grab failed: " + err.message);
+      }
+    },
+
+    async cancel(job) {
+      try {
+        await this.api("/api/jobs/" + job.id + "/cancel", { method: "POST" });
+        this.showToast("Cancelling: " + (job.title || job.video_id));
+      } catch (err) {
+        if (err.message !== "password required") this.showToast("Cancel failed: " + err.message);
       }
     },
 
@@ -211,6 +234,8 @@ createApp({
           output_format: this.settings.output_format,
           bitrate: this.settings.bitrate,
           inbox: this.settings.inbox,
+          concurrency: this.settings.concurrency,
+          cookies: "",
           new_password: "",
         };
         await this.refreshHealth();
@@ -225,8 +250,10 @@ createApp({
         output_format: this.draft.output_format,
         bitrate: this.draft.bitrate,
         inbox: this.draft.inbox,
+        concurrency: Number(this.draft.concurrency) || undefined,
       };
       if (this.draft.new_password) update.password = this.draft.new_password;
+      if (this.draft.cookies && this.draft.cookies.trim()) update.cookies = this.draft.cookies;
       try {
         this.settings = await this.api("/api/settings", {
           method: "PUT",
@@ -251,6 +278,18 @@ createApp({
 
     saveLayout() {
       localStorage.setItem(LS_LAYOUT, this.layout);
+    },
+
+    async clearCookies() {
+      try {
+        this.settings = await this.api("/api/settings", {
+          method: "PUT",
+          body: JSON.stringify({ cookies: "" }),
+        });
+        this.showToast("Cookies cleared");
+      } catch (err) {
+        if (err.message !== "password required") this.showToast("Clear failed: " + err.message);
+      }
     },
 
     async updateYtdlp() {

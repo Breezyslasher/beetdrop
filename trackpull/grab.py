@@ -11,7 +11,9 @@ mirror the pipeline; the CLI passes simple printers.
 from __future__ import annotations
 
 import os
+import random
 import shutil
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -179,7 +181,12 @@ def run_album_grab(
         staged = scratch / "staged" / folder_name
         staged.mkdir(parents=True)
         on_stage("downloading")
+        delay_low, delay_high = config.track_delay_range()
         for index, track in enumerate(tracks):
+            if index > 0 and delay_high > 0:
+                # Randomized spacing between tracks: back-to-back
+                # downloads look bot-like to YouTube's throttling.
+                time.sleep(random.uniform(delay_low, delay_high))
             on_detail("track %d/%d: %s" % (index + 1, total, track.title))
 
             def progress_hook(data: dict, _base=index) -> None:
