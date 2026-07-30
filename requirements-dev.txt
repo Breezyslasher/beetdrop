@@ -1,0 +1,6 @@
+pytest>=8
+# starlette's TestClient needs an httpx client library; recent starlette
+# (>=1.x) imports httpx2, older imports httpx. Install both so the tests
+# run against either.
+httpx
+httpx2
