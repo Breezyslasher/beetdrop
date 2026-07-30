@@ -14,6 +14,9 @@ services:
     restart: unless-stopped
 
     ports:
+      # host:container. If the host port is already allocated ("Bind for
+      # 0.0.0.0:8090 failed"), change only the left side, e.g. "8091:8090",
+      # and browse to that port instead. The container side stays 8090.
       - "8090:8090"
 
     volumes:
