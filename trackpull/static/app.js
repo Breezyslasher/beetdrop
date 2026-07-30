@@ -4,7 +4,6 @@
 
 const { createApp } = Vue;
 
-const LS_PASSWORD = "trackpull.password";
 const LS_LAYOUT = "trackpull.layout";
 const MOBILE_QUERY = "(max-width: 700px)";
 
@@ -29,9 +28,9 @@ createApp({
       settingsOpen: false,
       draft: {},
 
-      password: localStorage.getItem(LS_PASSWORD) || "",
       passwordNeeded: false,
       passwordInput: "",
+      passwordError: "",
 
       layout: localStorage.getItem(LS_LAYOUT) || "auto",
       mediaMobile: window.matchMedia(MOBILE_QUERY).matches,
@@ -71,8 +70,9 @@ createApp({
   methods: {
     async api(path, options = {}) {
       const headers = Object.assign({}, options.headers);
-      if (this.password) headers["X-Trackpull-Password"] = this.password;
       if (options.body) headers["Content-Type"] = "application/json";
+      // Auth rides an HttpOnly session cookie set by /api/login; the
+      // password itself is never kept in the browser.
       const response = await fetch(path, Object.assign({}, options, { headers }));
       if (response.status === 401) {
         this.passwordNeeded = true;
@@ -187,10 +187,8 @@ createApp({
 
     connectEvents() {
       if (this.es) this.es.close();
-      const url = this.password
-        ? "/events?password=" + encodeURIComponent(this.password)
-        : "/events";
-      this.es = new EventSource(url);
+      // Same-origin EventSource carries the session cookie by itself.
+      this.es = new EventSource("/events");
       this.es.addEventListener("job", (event) => {
         this.esDelay = 1000;
         this.upsertJob(JSON.parse(event.data));
@@ -235,8 +233,12 @@ createApp({
           body: JSON.stringify(update),
         });
         if (this.draft.new_password) {
-          this.password = this.draft.new_password;
-          localStorage.setItem(LS_PASSWORD, this.password);
+          // Changing the password invalidates every session including
+          // this one; log straight back in with the new password.
+          await this.api("/api/login", {
+            method: "POST",
+            body: JSON.stringify({ password: this.draft.new_password }),
+          });
           this.connectEvents();
         }
         this.settingsOpen = false;
@@ -268,13 +270,26 @@ createApp({
       }
     },
 
-    submitPassword() {
-      this.password = this.passwordInput;
-      localStorage.setItem(LS_PASSWORD, this.password);
-      this.passwordInput = "";
-      this.passwordNeeded = false;
-      this.connectEvents();
-      this.refreshJobs();
+    async submitPassword() {
+      this.passwordError = "";
+      try {
+        const response = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: this.passwordInput }),
+        });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          this.passwordError = body.detail || ("login failed (" + response.status + ")");
+          return;
+        }
+        this.passwordInput = "";
+        this.passwordNeeded = false;
+        this.connectEvents();
+        this.refreshJobs();
+      } catch (err) {
+        this.passwordError = "login failed: " + err.message;
+      }
     },
   },
 

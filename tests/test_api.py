@@ -186,8 +186,37 @@ class TestPassword:
         assert client.get("/api/jobs").status_code == 401
         assert client.get("/api/health").status_code == 200
         assert client.get("/api/jobs", headers={"X-Trackpull-Password": "hunter2"}).status_code == 200
-        assert client.get("/api/jobs", params={"password": "hunter2"}).status_code == 200
+        # The password is never accepted in a query string: query strings
+        # end up in access logs.
+        assert client.get("/api/jobs", params={"password": "hunter2"}).status_code == 401
         assert client.get("/api/jobs", headers={"X-Trackpull-Password": "wrong"}).status_code == 401
+
+    def test_login_sets_session_cookie(self, client):
+        client.put("/api/settings", json={"password": "hunter2"})
+        response = client.post("/api/login", json={"password": "hunter2"})
+        assert response.status_code == 200
+        assert "trackpull_session" in response.cookies
+        # TestClient carries the cookie jar forward.
+        assert client.get("/api/jobs").status_code == 200
+
+    def test_wrong_login_rejected(self, client):
+        client.put("/api/settings", json={"password": "hunter2"})
+        assert client.post("/api/login", json={"password": "nope"}).status_code == 401
+
+    def test_password_stored_hashed(self, client):
+        client.put("/api/settings", json={"password": "hunter2"})
+        from trackpull.db import Store
+        stored = Store(client.config.db_path).get_settings()["password"]
+        assert "hunter2" not in stored
+        assert stored.startswith("pbkdf2:sha256:")
+
+    def test_password_change_invalidates_sessions(self, client):
+        client.put("/api/settings", json={"password": "hunter2"})
+        client.post("/api/login", json={"password": "hunter2"})
+        assert client.get("/api/jobs").status_code == 200
+        client.put("/api/settings", json={"password": "different"},
+                   headers={"X-Trackpull-Password": "hunter2"})
+        assert client.get("/api/jobs").status_code == 401
 
 
 class TestSearch:

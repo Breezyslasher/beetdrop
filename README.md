@@ -160,10 +160,26 @@ Stages: queued, searching, downloading, extracting, tagging, moving,
 done, failed.
 
 Auth is an optional single shared password (set via settings or
-`TRACKPULL_PASSWORD`), supplied as an `X-Trackpull-Password` header or a
-`password` query parameter (for EventSource). `/api/health` stays open
-so container healthchecks work. No TLS: this is a LAN tool that sits
-behind whatever reverse proxy already exists.
+`TRACKPULL_PASSWORD`), hardened enough to sit behind a Cloudflare
+tunnel or other internet-facing proxy:
+
+- The password is stored as a salted PBKDF2 hash, never plaintext (a
+  plaintext password stored by an earlier version is hashed in place on
+  startup), and every comparison is constant-time.
+- Browsers log in once via `POST /api/login` and hold a signed HttpOnly
+  session cookie for 30 days; the password is never kept in the browser
+  and never appears in a query string (query strings end up in access
+  logs - the old `?password=` parameter is gone). Changing the password
+  invalidates every session.
+- Scripts and curl use the `X-Trackpull-Password` header.
+- Failed attempts are throttled per client (5 in 15 minutes, keyed by
+  `CF-Connecting-IP` behind Cloudflare), after which logins answer 429.
+- All responses carry nosniff/frame-deny/no-referrer headers, and shell
+  assets are served `no-cache` so a stale cached app.js can never be
+  mixed with fresh HTML.
+
+`/api/health` stays open so container healthchecks work. TLS is the
+tunnel or reverse proxy's job.
 
 ## Operations
 

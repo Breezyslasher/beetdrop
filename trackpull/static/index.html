@@ -198,6 +198,7 @@
         <label>Password
           <input v-model="passwordInput" type="password" autocomplete="current-password">
         </label>
+        <p v-if="passwordError" class="error">{{ passwordError }}</p>
         <div class="panel-actions">
           <button type="submit" class="primary">Unlock</button>
         </div>

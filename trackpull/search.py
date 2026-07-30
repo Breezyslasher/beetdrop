@@ -53,6 +53,27 @@ class AlbumLookup:
     unavailable: list[str] = field(default_factory=list)  # titles with no videoId
 
 
+def _duration_to_seconds(text) -> Optional[int]:
+    try:
+        parts = [int(p) for p in text.split(":")]
+    except (ValueError, AttributeError):
+        return None
+    seconds = 0
+    for part in parts:
+        seconds = seconds * 60 + part
+    return seconds
+
+
+def _row_duration(row: dict) -> Optional[int]:
+    # ytmusicapi does not always populate duration_seconds; fall back to
+    # parsing the "3:45" display text so the card never loses the one
+    # field that exposes extended mixes and live cuts.
+    duration = row.get("duration_seconds")
+    if duration is None:
+        duration = _duration_to_seconds(row.get("duration", ""))
+    return duration
+
+
 def _normalise(row: dict) -> Optional[Result]:
     video_id = row.get("videoId")
     if not video_id:
@@ -69,7 +90,7 @@ def _normalise(row: dict) -> Optional[Result]:
         raw_title=raw_title,
         artists=artists,
         album=album,
-        duration_seconds=row.get("duration_seconds"),
+        duration_seconds=_row_duration(row),
         thumbnail_url=thumbnails[-1]["url"] if thumbnails else "",
     )
 
@@ -116,17 +137,6 @@ def search_albums(query: str, limit: int = DEFAULT_LIMIT) -> list[AlbumResult]:
     return results
 
 
-def _duration_to_seconds(text: str) -> Optional[int]:
-    try:
-        parts = [int(p) for p in text.split(":")]
-    except (ValueError, AttributeError):
-        return None
-    seconds = 0
-    for part in parts:
-        seconds = seconds * 60 + part
-    return seconds
-
-
 def lookup_album(browse_id: str) -> AlbumLookup:
     """Resolve an album browseId into its metadata and playable tracks.
 
@@ -154,9 +164,7 @@ def lookup_album(browse_id: str) -> AlbumLookup:
             unavailable.append(raw_title or ("track %d" % index))
             continue
         track_artists = [a.get("name", "") for a in row.get("artists") or [] if a.get("name")]
-        duration = row.get("duration_seconds")
-        if duration is None:
-            duration = _duration_to_seconds(row.get("duration", ""))
+        duration = _row_duration(row)
         tracks.append(Result(
             video_id=row["videoId"],
             title=clean_title(raw_title),
