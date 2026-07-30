@@ -36,14 +36,15 @@ from .db import Store
 from .download import ytdlp_version
 from .events import Broadcaster, sse_format
 from .jobs import JobManager
-from .search import search_songs
+from .search import search_albums, search_songs
 
 SSE_KEEPALIVE_SECONDS = 15
 STATIC_DIR = Path(__file__).parent / "static"
 
 
 class GrabRequest(BaseModel):
-    video_id: str
+    video_id: str  # a videoId for kind=track, an album browseId for kind=album
+    kind: str = "track"
     format: str = ""
     bitrate: str = ""
 
@@ -107,20 +108,26 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
     # -- endpoints -----------------------------------------------------------
 
     @app.get("/api/search", dependencies=[protected])
-    async def api_search(q: str, limit: int = 8):
+    async def api_search(q: str, limit: int = 8, type: str = "songs"):
+        if type not in ("songs", "albums"):
+            raise HTTPException(status_code=422, detail="type must be songs or albums")
         limit = max(1, min(limit, 20))
         # to_thread keeps the loop free; downloads run in their own pool,
         # so a search never waits behind one.
-        results = await asyncio.to_thread(search_songs, q, limit)
-        return {"results": [asdict(r) for r in results]}
+        search = search_albums if type == "albums" else search_songs
+        results = await asyncio.to_thread(search, q, limit)
+        return {"type": type, "results": [asdict(r) for r in results]}
 
     @app.post("/api/grab", status_code=202, dependencies=[protected])
     async def api_grab(body: GrabRequest):
         if body.format and body.format not in SUPPORTED_FORMATS:
             raise HTTPException(status_code=422, detail="format must be one of %s" % (SUPPORTED_FORMATS,))
+        if body.kind not in ("track", "album"):
+            raise HTTPException(status_code=422, detail="kind must be track or album")
         if not body.video_id.strip():
             raise HTTPException(status_code=422, detail="video_id is required")
-        job = manager.enqueue(body.video_id.strip(), body.format, body.bitrate)
+        job = manager.enqueue(body.video_id.strip(), body.format, body.bitrate,
+                              kind=body.kind)
         return job
 
     @app.get("/api/jobs", dependencies=[protected])

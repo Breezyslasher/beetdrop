@@ -24,10 +24,33 @@ class Result:
     album: Optional[str] = None
     duration_seconds: Optional[int] = None
     thumbnail_url: str = ""
+    track_number: Optional[int] = None  # known only for album tracks
 
     @property
     def artist_display(self) -> str:
         return ", ".join(self.artists)
+
+
+@dataclass
+class AlbumResult:
+    browse_id: str
+    title: str
+    artists: list[str] = field(default_factory=list)
+    year: str = ""
+    album_type: str = ""  # Album / EP / Single, as YouTube Music labels it
+    track_count: Optional[int] = None
+    thumbnail_url: str = ""
+
+    @property
+    def artist_display(self) -> str:
+        return ", ".join(self.artists)
+
+
+@dataclass
+class AlbumLookup:
+    album: AlbumResult
+    tracks: list[Result]
+    unavailable: list[str] = field(default_factory=list)  # titles with no videoId
 
 
 def _normalise(row: dict) -> Optional[Result]:
@@ -62,6 +85,89 @@ def search_songs(query: str, limit: int = DEFAULT_LIMIT) -> list[Result]:
         if len(results) >= limit:
             break
     return results
+
+
+def _parse_album_row(row: dict) -> Optional[AlbumResult]:
+    browse_id = row.get("browseId")
+    if not browse_id:
+        return None
+    artists = [a.get("name", "") for a in row.get("artists") or [] if a.get("name")]
+    thumbnails = row.get("thumbnails") or []
+    return AlbumResult(
+        browse_id=browse_id,
+        title=row.get("title", ""),
+        artists=artists,
+        year=str(row.get("year") or ""),
+        album_type=row.get("type", ""),
+        thumbnail_url=thumbnails[-1]["url"] if thumbnails else "",
+    )
+
+
+def search_albums(query: str, limit: int = DEFAULT_LIMIT) -> list[AlbumResult]:
+    yt = YTMusic()
+    rows = yt.search(query, filter="albums", limit=limit)
+    results = []
+    for row in rows:
+        album = _parse_album_row(row)
+        if album:
+            results.append(album)
+        if len(results) >= limit:
+            break
+    return results
+
+
+def _duration_to_seconds(text: str) -> Optional[int]:
+    try:
+        parts = [int(p) for p in text.split(":")]
+    except (ValueError, AttributeError):
+        return None
+    seconds = 0
+    for part in parts:
+        seconds = seconds * 60 + part
+    return seconds
+
+
+def lookup_album(browse_id: str) -> AlbumLookup:
+    """Resolve an album browseId into its metadata and playable tracks.
+
+    Tracks YouTube Music serves without a videoId (region-locked or
+    delisted) are reported in `unavailable` rather than silently dropped.
+    """
+    yt = YTMusic()
+    data = yt.get_album(browse_id)
+    artists = [a.get("name", "") for a in data.get("artists") or [] if a.get("name")]
+    thumbnails = data.get("thumbnails") or []
+    album = AlbumResult(
+        browse_id=browse_id,
+        title=data.get("title", ""),
+        artists=artists,
+        year=str(data.get("year") or ""),
+        album_type=data.get("type", ""),
+        track_count=data.get("trackCount"),
+        thumbnail_url=thumbnails[-1]["url"] if thumbnails else "",
+    )
+    tracks: list[Result] = []
+    unavailable: list[str] = []
+    for index, row in enumerate(data.get("tracks") or [], start=1):
+        raw_title = row.get("title", "")
+        if not row.get("videoId"):
+            unavailable.append(raw_title or ("track %d" % index))
+            continue
+        track_artists = [a.get("name", "") for a in row.get("artists") or [] if a.get("name")]
+        duration = row.get("duration_seconds")
+        if duration is None:
+            duration = _duration_to_seconds(row.get("duration", ""))
+        tracks.append(Result(
+            video_id=row["videoId"],
+            title=clean_title(raw_title),
+            raw_title=raw_title,
+            artists=track_artists or artists,
+            album=album.title,
+            duration_seconds=duration,
+            thumbnail_url=album.thumbnail_url,
+            track_number=index,
+        ))
+    return AlbumLookup(album=album, tracks=tracks, unavailable=unavailable)
 
 
 def lookup_video(video_id: str) -> Result:

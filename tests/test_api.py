@@ -124,6 +124,37 @@ class TestGrab:
         response = client.post("/api/grab", json={"video_id": "  "})
         assert response.status_code == 422
 
+    def test_album_grab_lifecycle(self, client, monkeypatch):
+        from trackpull.grab import AlbumGrabOutcome
+
+        def fake_album_grab(browse_id, cfg, fmt="", bitrate="",
+                            on_stage=lambda s: None, on_progress=lambda p: None,
+                            on_resolved=lambda t, a: None, on_detail=lambda d: None):
+            on_stage("searching")
+            on_resolved("The Album", "Artist")
+            on_stage("downloading")
+            on_detail("track 2/2: Song")
+            on_stage("moving")
+            destination = cfg.inbox / "Artist - The Album"
+            destination.mkdir(parents=True, exist_ok=True)
+            return AlbumGrabOutcome(
+                inbox_path=destination, album_title="The Album",
+                album_artist="Artist", delivered=2, failed=["Bad One: nope"],
+            )
+
+        monkeypatch.setattr(jobs_module, "run_album_grab", fake_album_grab)
+        job = client.post("/api/grab", json={"video_id": "MPREb_1", "kind": "album"}).json()
+        assert job["kind"] == "album"
+        finished = wait_for_stage(client, job["id"])
+        assert finished["stage"] == "done"
+        assert finished["title"] == "The Album"
+        assert finished["detail"] == "delivered 2/3 tracks; failed: Bad One: nope"
+        assert finished["inbox_state"] == "waiting"
+
+    def test_invalid_kind_rejected(self, client):
+        response = client.post("/api/grab", json={"video_id": "v", "kind": "playlist"})
+        assert response.status_code == 422
+
     def test_jobs_listing_persists(self, client):
         job = client.post("/api/grab", json={"video_id": "vid-1"}).json()
         wait_for_stage(client, job["id"])

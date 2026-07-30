@@ -12,7 +12,9 @@ createApp({
   data() {
     return {
       query: "",
+      searchType: "songs",
       results: [],
+      resultsType: "songs",
       searching: false,
       searched: false,
       grabbing: {},
@@ -95,13 +97,21 @@ createApp({
       return m + ":" + s;
     },
 
+    setSearchType(type) {
+      this.searchType = type;
+      if (this.searched && this.query.trim()) this.search();
+    },
+
     async search() {
       const q = this.query.trim();
       if (!q || this.searching) return;
       this.searching = true;
       try {
-        const body = await this.api("/api/search?q=" + encodeURIComponent(q));
+        const body = await this.api(
+          "/api/search?q=" + encodeURIComponent(q) + "&type=" + this.searchType
+        );
         this.results = body.results;
+        this.resultsType = body.type || "songs";
         this.searched = true;
       } catch (err) {
         if (err.message !== "password required") this.showToast("Search failed: " + err.message);
@@ -110,17 +120,18 @@ createApp({
       }
     },
 
-    async grab(result) {
-      this.grabbing[result.video_id] = true;
+    async grab(result, kind) {
+      const id = kind === "album" ? result.browse_id : result.video_id;
+      this.grabbing[id] = true;
       try {
         const job = await this.api("/api/grab", {
           method: "POST",
-          body: JSON.stringify({ video_id: result.video_id }),
+          body: JSON.stringify({ video_id: id, kind: kind }),
         });
         this.upsertJob(job);
         this.showToast("Queued: " + result.title);
       } catch (err) {
-        delete this.grabbing[result.video_id];
+        delete this.grabbing[id];
         if (err.message !== "password required") this.showToast("Grab failed: " + err.message);
       }
     },

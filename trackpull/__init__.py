@@ -6,5 +6,5 @@ beets. No MusicBrainz lookups, no release disambiguation, no cover art, no
 library paths — beets does every one of those things better.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 APP_NAME = "trackpull"

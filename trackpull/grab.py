@@ -17,11 +17,11 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .config import Config
-from .download import download_audio
+from .download import DownloadError, download_audio
 from .handoff import deliver, same_filesystem
-from .paths import grab_folder_name
-from .search import Result, lookup_video
-from .seedtags import seed_from_result, verify_audio, write_seed_tags
+from .paths import grab_folder_name, sanitize_segment
+from .search import AlbumLookup, Result, lookup_album, lookup_video
+from .seedtags import SeedTags, seed_from_result, verify_audio, write_seed_tags
 
 # Stage labels, in pipeline order. "queued", "done" and "failed" are owned
 # by the job layer.
@@ -98,3 +98,108 @@ def run_grab(
         shutil.rmtree(scratch, ignore_errors=True)
 
     return GrabOutcome(inbox_path=destination, result=result)
+
+
+@dataclass
+class AlbumGrabOutcome:
+    inbox_path: Path
+    album_title: str
+    album_artist: str
+    delivered: int
+    failed: list[str]  # "title: reason" per track that could not be grabbed
+
+
+def run_album_grab(
+    browse_id: str,
+    config: Config,
+    fmt: str = "",
+    bitrate: str = "",
+    on_stage: Callable[[str], None] = _noop,
+    on_progress: Callable[[float], None] = _noop,
+    on_resolved: Callable[[str, str], None] = _noop,  # (album title, album artist)
+    on_detail: Callable[[str], None] = _noop,
+) -> AlbumGrabOutcome:
+    """Grab a whole album: every playable track downloaded, seed-tagged
+    with its track number, and delivered as ONE album folder in a single
+    atomic rename - a complete album folder is beets' best import unit.
+
+    Individual track failures do not abort the album; they are collected
+    and reported. Only an album with zero successful tracks fails.
+    """
+    fmt = fmt or config.output_format
+    bitrate = bitrate or config.bitrate
+
+    job_id = uuid.uuid4().hex[:12]
+    scratch = config.scratch_root / job_id
+    config.scratch_root.mkdir(parents=True, exist_ok=True)
+    cross_fs = not same_filesystem(config.scratch_root, config.inbox)
+
+    on_stage("searching")
+    lookup: AlbumLookup = lookup_album(browse_id)
+    album_artist = lookup.album.artist_display or "Unknown Artist"
+    on_resolved(lookup.album.title, album_artist)
+    if not lookup.tracks:
+        raise DownloadError("album has no playable tracks")
+
+    folder_name = grab_folder_name(album_artist, lookup.album.title)
+    failed = ["%s: not available on YouTube Music" % t for t in lookup.unavailable]
+    total = len(lookup.tracks)
+    delivered = 0
+
+    try:
+        staged = scratch / "staged" / folder_name
+        staged.mkdir(parents=True)
+        on_stage("downloading")
+        for index, track in enumerate(lookup.tracks):
+            on_detail("track %d/%d: %s" % (index + 1, total, track.title))
+
+            def progress_hook(data: dict, _base=index) -> None:
+                if data.get("status") != "downloading":
+                    return
+                total_bytes = data.get("total_bytes") or data.get("total_bytes_estimate")
+                downloaded = data.get("downloaded_bytes")
+                if total_bytes and downloaded is not None:
+                    fraction = min(1.0, downloaded / total_bytes)
+                    on_progress((_base + fraction) / total * 100.0)
+
+            try:
+                track_dir = scratch / ("t%02d" % index)
+                audio_path = download_audio(
+                    track.video_id, track_dir, fmt=fmt, bitrate=bitrate,
+                    cookies_file=config.cookies_file, progress_hook=progress_hook,
+                )
+                verify_audio(audio_path)
+                write_seed_tags(audio_path, SeedTags(
+                    title=track.title,
+                    artist=track.artist_display or album_artist,
+                    albumartist=album_artist,
+                    album=lookup.album.title,
+                    tracknumber=track.track_number,  # known here, so written
+                ))
+                target = staged / ("%02d - %s%s" % (
+                    track.track_number or (index + 1),
+                    sanitize_segment(track.title),
+                    audio_path.suffix,
+                ))
+                audio_path.rename(target)
+                delivered += 1
+            except Exception as exc:
+                failed.append("%s: %s" % (track.title, str(exc)[:200]))
+            on_progress((index + 1) / total * 100.0)
+
+        if delivered == 0:
+            raise DownloadError(
+                "no tracks could be grabbed: " + "; ".join(failed[:5])
+            )
+        on_stage("moving")
+        destination = deliver(staged, config.inbox, folder_name, cross_fs)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+    return AlbumGrabOutcome(
+        inbox_path=destination,
+        album_title=lookup.album.title,
+        album_artist=album_artist,
+        delivered=delivered,
+        failed=failed,
+    )

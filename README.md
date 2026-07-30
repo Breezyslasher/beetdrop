@@ -29,6 +29,27 @@ Current status: CLI, web API, web UI (PWA), and Docker image.
    a watching beets-flask never observes a partially written folder.
    Existing folders are never overwritten; collisions get a ` (2)` suffix.
 
+## Albums
+
+Search can be switched between songs and albums (UI toggle, `--albums`
+on the CLI, `type=albums` on the API). Grabbing an album downloads
+every playable track, seed-tags each with its track number (known from
+the album order, so it is written here unlike single grabs), names the
+files `NN - Title.ext`, and delivers the whole thing as ONE album
+folder in a single atomic rename - a complete album folder is beets'
+best import unit and matches full releases far better than singletons.
+
+Individual track failures do not abort the album: the rest is
+delivered and the job records which tracks failed and why (including
+tracks YouTube Music serves without a videoId). Track numbering
+preserves gaps, so a missing track 5 does not shift track 6. Only an
+album with zero successful tracks fails.
+
+```
+python -m trackpull search "artist album" --albums
+python -m trackpull grab <browse_id> --album
+```
+
 Success means the file was handed off to the inbox, not that it was
 imported — whether it imports is beets' decision.
 
