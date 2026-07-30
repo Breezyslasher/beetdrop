@@ -1,0 +1,77 @@
+name: Publish Trackpull image
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'Dockerfile'
+      - 'docker/**'
+      - 'trackpull/**'
+      - 'requirements.txt'
+      - '.github/workflows/publish-docker.yml'
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: trackpull
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read app version
+        id: version
+        run: |
+          VERSION=$(sed -n 's/^__version__ = "\([^"]*\)".*/\1/p' trackpull/__init__.py | head -1)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "App version: $VERSION"
+
+      - name: Set up QEMU (arm builds)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # To also push to Docker Hub, create the repo secrets
+      # DOCKERHUB_USERNAME and DOCKERHUB_TOKEN, then uncomment:
+      # - name: Log in to Docker Hub
+      #   uses: docker/login-action@v3
+      #   with:
+      #     username: ${{ secrets.DOCKERHUB_USERNAME }}
+      #     password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Image tags
+        id: tags
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          BASE="ghcr.io/${OWNER}/${IMAGE_NAME}"
+          TAGS="${BASE}:latest,${BASE}:${{ steps.version.outputs.version }}"
+          # For Docker Hub, also append e.g.:
+          # TAGS="$TAGS,${{ secrets.DOCKERHUB_USERNAME }}/${IMAGE_NAME}:latest"
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+          echo "Tags: $TAGS"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.title=Trackpull
+            org.opencontainers.image.description=Search YouTube Music and drop seed-tagged audio into a beets-flask inbox
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}

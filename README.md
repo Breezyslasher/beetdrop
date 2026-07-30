@@ -91,6 +91,21 @@ FLAC and WAV are not offered: YouTube Music's source ceiling is roughly
 file carrying no additional information and would make the library
 misreport its own quality.
 
+## Docker
+
+```
+docker compose up -d
+```
+
+See docker-compose.yml for the volume and PUID/PGID wiring; the inbox
+volume must resolve to the same path beets-flask watches. The image is
+published to GitHub Container Registry as
+`ghcr.io/breezyslasher/trackpull` (latest and per-version tags) by the
+publish-docker workflow on every push to main that touches the app or
+the Dockerfile. Set `TRACKPULL_SELFUPDATE=1` to refresh yt-dlp at
+container start; the resolved version is always visible in
+/api/settings and /api/health.
+
 ## Tests
 
 ```

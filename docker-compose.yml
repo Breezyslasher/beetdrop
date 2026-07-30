@@ -1,0 +1,20 @@
+# Shares the inbox volume with beets-flask; both containers must resolve
+# the same path.
+services:
+  trackpull:
+    image: ghcr.io/breezyslasher/trackpull:latest
+    container_name: trackpull
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    volumes:
+      - /srv/dev-disk-by-uuid-XXXX/appdata/trackpull:/config
+      - /srv/dev-disk-by-uuid-XXXX/Media/inbox:/inbox
+      # - /srv/dev-disk-by-uuid-XXXX/appdata/trackpull/cookies.txt:/config/cookies.txt:ro
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/New_York
+      - INBOX_PATH=/inbox
+      # - TRACKPULL_SELFUPDATE=1
+      # - TRACKPULL_COOKIES=/config/cookies.txt
