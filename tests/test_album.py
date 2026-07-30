@@ -71,7 +71,7 @@ def album_env(tmp_path, monkeypatch):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     config = Config(inbox=inbox, scratch_root=tmp_path / "scratch",
-                    config_dir=tmp_path / "config")
+                    config_dir=tmp_path / "config", track_delay="0")
 
     def fake_download(video_id, scratch_dir, fmt="opus", **kwargs):
         scratch_dir.mkdir(parents=True, exist_ok=True)

@@ -56,6 +56,7 @@ class GrabRequest(BaseModel):
     kind: str = "track"
     format: str = ""
     bitrate: str = ""
+    force: bool = False  # grab even when it was already grabbed
 
 
 class SettingsUpdate(BaseModel):
@@ -63,6 +64,8 @@ class SettingsUpdate(BaseModel):
     bitrate: Optional[str] = None
     inbox: Optional[str] = None
     password: Optional[str] = None
+    concurrency: Optional[int] = None
+    cookies: Optional[str] = None  # cookies.txt content; "" clears
 
 
 class LoginRequest(BaseModel):
@@ -77,6 +80,8 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
     store = Store(base.db_path)
     broadcaster = Broadcaster()
 
+    uploaded_cookies = base.config_dir / "cookies.txt"
+
     def effective_config() -> Config:
         """Environment defaults, overridden by settings stored in SQLite."""
         stored = store.get_settings()
@@ -89,11 +94,22 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             config.inbox = Path(stored["inbox"])
         if stored.get("password"):
             config.password = stored["password"]
+        if stored.get("concurrency"):
+            try:
+                config.concurrency = int(stored["concurrency"])
+            except ValueError:
+                pass
+        # Cookies uploaded through Settings win over the mounted file.
+        if uploaded_cookies.is_file() and uploaded_cookies.stat().st_size > 0:
+            config.cookies_file = str(uploaded_cookies)
         return config
 
-    manager = JobManager(store, broadcaster, effective_config)
     secret = load_or_create_secret(base.config_dir)
     throttle = LoginThrottle()
+    # Worker pool size comes from settings at startup; changing the
+    # setting applies on the next restart.
+    manager = JobManager(store, broadcaster, effective_config,
+                         max_workers=effective_config().concurrency)
 
     # A plaintext password stored by an earlier version is hashed in
     # place on startup; it never needs to exist in plaintext again.
@@ -204,8 +220,19 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             raise HTTPException(status_code=422, detail="kind must be track or album")
         if not body.video_id.strip():
             raise HTTPException(status_code=422, detail="video_id is required")
-        job = manager.enqueue(body.video_id.strip(), body.format, body.bitrate,
-                              kind=body.kind)
+        video_id = body.video_id.strip()
+        if not body.force:
+            duplicate = store.find_duplicate(video_id, body.kind)
+            if duplicate is not None:
+                active = duplicate["stage"] not in ("done",)
+                raise HTTPException(status_code=409, detail={
+                    "message": ("this %s is already being grabbed" % body.kind)
+                               if active else
+                               ("this %s was already grabbed" % body.kind),
+                    "existing_job": {k: duplicate[k] for k in
+                                     ("id", "title", "artist", "stage", "created_at")},
+                })
+        job = manager.enqueue(video_id, body.format, body.bitrate, kind=body.kind)
         return job
 
     @app.get("/api/jobs", dependencies=[protected])
@@ -219,6 +246,13 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="no such job")
         return job
 
+    @app.post("/api/jobs/{job_id}/cancel", dependencies=[protected])
+    async def api_cancel(job_id: str):
+        job = manager.cancel(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="no such job")
+        return job
+
     @app.get("/api/settings", dependencies=[protected])
     async def api_get_settings():
         config = effective_config()
@@ -227,6 +261,9 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             "bitrate": config.bitrate,
             "inbox": str(config.inbox),
             "password_set": bool(config.password),
+            "concurrency": config.concurrency,
+            "workers_active": True,  # concurrency changes apply on restart
+            "cookies_set": bool(config.cookies_file),
             "ytdlp_version": ytdlp_version(),  # read-only
         }
 
@@ -234,7 +271,19 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
     async def api_put_settings(body: SettingsUpdate):
         if body.output_format is not None and body.output_format not in SUPPORTED_FORMATS:
             raise HTTPException(status_code=422, detail="format must be one of %s" % (SUPPORTED_FORMATS,))
-        updates = {k: v for k, v in body.model_dump().items() if v is not None}
+        if body.concurrency is not None and not (1 <= body.concurrency <= 4):
+            raise HTTPException(status_code=422, detail="concurrency must be 1-4")
+        if body.cookies is not None:
+            # Stored as a file because yt-dlp wants a cookiefile path;
+            # kept out of the DB and readable only by the app user.
+            if body.cookies.strip():
+                uploaded_cookies.parent.mkdir(parents=True, exist_ok=True)
+                uploaded_cookies.touch(mode=0o600, exist_ok=True)
+                uploaded_cookies.write_text(body.cookies)
+            elif uploaded_cookies.exists():
+                uploaded_cookies.unlink()
+        updates = {k: v for k, v in body.model_dump().items()
+                   if v is not None and k != "cookies"}
         if updates.get("password"):
             # Hashed at rest; changing it also invalidates every session,
             # since the hash is part of the token signing key.

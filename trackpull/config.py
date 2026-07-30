@@ -34,6 +34,26 @@ class Config:
     # Running out of disk mid-album otherwise surfaces as a confusing
     # ffmpeg/yt-dlp error after the download already happened.
     min_free_mb: int = field(default_factory=lambda: int(os.environ.get("TRACKPULL_MIN_FREE_MB", "512")))
+    # Randomized pause between album tracks ("min-max" seconds, or a
+    # single number). Back-to-back downloads look bot-like to YouTube's
+    # throttling heuristics.
+    track_delay: str = field(default_factory=lambda: os.environ.get("TRACKPULL_TRACK_DELAY", "2-5"))
+    # Concurrent download workers (1-4). Applied at startup.
+    concurrency: int = field(default_factory=lambda: int(os.environ.get("TRACKPULL_CONCURRENCY", "2")))
+    # Job history retention: terminal jobs beyond both limits are pruned.
+    keep_jobs: int = field(default_factory=lambda: int(os.environ.get("TRACKPULL_KEEP_JOBS", "200")))
+    keep_days: int = field(default_factory=lambda: int(os.environ.get("TRACKPULL_KEEP_DAYS", "30")))
+
+    def track_delay_range(self) -> tuple:
+        try:
+            parts = self.track_delay.split("-", 1)
+            low = float(parts[0])
+            high = float(parts[1]) if len(parts) > 1 else low
+        except (ValueError, AttributeError):
+            return (2.0, 5.0)
+        if high < low:
+            low, high = high, low
+        return (max(0.0, low), max(0.0, high))
 
     @property
     def db_path(self) -> Path:

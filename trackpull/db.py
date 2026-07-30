@@ -37,7 +37,7 @@ JOB_COLUMNS = (
 
 # Settings the API may read and write. yt-dlp version is reported
 # read-only by the settings endpoint and lives nowhere.
-SETTING_KEYS = ("output_format", "bitrate", "inbox", "password")
+SETTING_KEYS = ("output_format", "bitrate", "inbox", "password", "concurrency")
 
 
 class Store:
@@ -134,9 +134,35 @@ class Store:
         """Jobs that were mid-flight when the process died."""
         with self._lock:
             rows = self._db.execute(
-                "SELECT * FROM jobs WHERE stage NOT IN ('done', 'failed')"
+                "SELECT * FROM jobs WHERE stage NOT IN ('done', 'failed', 'cancelled')"
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def find_duplicate(self, video_id: str, kind: str) -> Optional[dict]:
+        """Most recent job for the same id: an active one, else the most
+        recent successful one. Used to warn before grabbing twice."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM jobs WHERE video_id = ? AND kind = ?"
+                " AND stage NOT IN ('failed', 'cancelled')"
+                " ORDER BY created_at DESC LIMIT 1",
+                (video_id, kind),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def prune(self, keep_jobs: int, keep_days: int) -> int:
+        """Delete terminal jobs that are BOTH beyond the newest keep_jobs
+        and older than keep_days. Active jobs are never pruned."""
+        cutoff = time.time() - keep_days * 86400
+        with self._lock:
+            result = self._db.execute(
+                "DELETE FROM jobs WHERE stage IN ('done', 'failed', 'cancelled')"
+                " AND created_at < ?"
+                " AND id NOT IN (SELECT id FROM jobs ORDER BY created_at DESC LIMIT ?)",
+                (cutoff, keep_jobs),
+            )
+            self._db.commit()
+        return result.rowcount
 
     def count_failed_since(self, seconds: float) -> int:
         """Failed jobs in the trailing window - a wave of these usually

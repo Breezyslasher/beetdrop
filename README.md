@@ -208,6 +208,24 @@ tunnel or reverse proxy's job.
   expandable log in the queue.
 - The format picker next to the search field overrides the output
   format for individual grabs without touching the saved setting.
+- Queued and running jobs have a Cancel button; a running job stops at
+  its next progress update. Cancelled jobs can be retried.
+- Grabbing something already grabbed (or currently in flight) answers
+  409 with the existing job; the UI asks before grabbing again, and the
+  API takes force: true to override.
+- Terminal jobs are pruned once they are BOTH older than
+  TRACKPULL_KEEP_DAYS (default 30) and beyond the newest
+  TRACKPULL_KEEP_JOBS (default 200).
+- Album tracks download with a randomized pause between them
+  (TRACKPULL_TRACK_DELAY, default "2-5" seconds) - back-to-back
+  downloads look bot-like to YouTube's throttling.
+- Cookies for throttled or region-locked videos can be pasted straight
+  into Settings (stored as a file in /config, mode 600); an uploaded
+  cookie file wins over the TRACKPULL_COOKIES mount. Clearing removes
+  the file.
+- Concurrent download workers are settable 1-4 (Settings or
+  TRACKPULL_CONCURRENCY, default 2); the change applies on the next
+  container restart.
 
 FLAC and WAV are not offered: YouTube Music's source ceiling is roughly
 160 kbps Opus or 256 kbps AAC, so a lossless container would be a larger
