@@ -45,6 +45,16 @@ tracks YouTube Music serves without a videoId). Track numbering
 preserves gaps, so a missing track 5 does not shift track 6. Only an
 album with zero successful tracks fails.
 
+An album that finished with gaps shows a "Retry failed tracks" button:
+the retry re-downloads only the tracks that failed. If the album folder
+is still in the inbox, recovered tracks are patched into it (one atomic
+replace per file, never overwriting), so beets sees one complete album
+before importing; if beets already took the folder, the recovered
+tracks are delivered as a new album folder and beets merges them into
+the same release on import. A retry that recovers nothing leaves the
+job done and the delivered folder untouched - permanently unavailable
+tracks stay listed so you know what is missing.
+
 ```
 python -m trackpull search "artist album" --albums
 python -m trackpull grab <browse_id> --album

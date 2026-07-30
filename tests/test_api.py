@@ -127,10 +127,13 @@ class TestGrab:
     def test_album_grab_lifecycle(self, client, monkeypatch):
         from trackpull.grab import AlbumGrabOutcome
 
+        calls = []
+
         def fake_album_grab(browse_id, cfg, fmt="", bitrate="",
                             on_stage=lambda s: None, on_progress=lambda p: None,
                             on_resolved=lambda t, a: None, on_detail=lambda d: None,
-                            logger=None):
+                            logger=None, only_tracks=None, patch_into=None):
+            calls.append({"only_tracks": only_tracks, "patch_into": patch_into})
             on_stage("searching")
             on_resolved("The Album", "Artist")
             on_stage("downloading")
@@ -138,9 +141,11 @@ class TestGrab:
             on_stage("moving")
             destination = cfg.inbox / "Artist - The Album"
             destination.mkdir(parents=True, exist_ok=True)
+            failed = [] if only_tracks else [{"n": 3, "title": "Bad One", "reason": "nope"}]
             return AlbumGrabOutcome(
                 inbox_path=destination, album_title="The Album",
-                album_artist="Artist", delivered=2, failed=["Bad One: nope"],
+                album_artist="Artist", delivered=2 if not only_tracks else 1,
+                failed=failed,
             )
 
         monkeypatch.setattr(jobs_module, "run_album_grab", fake_album_grab)
@@ -151,6 +156,21 @@ class TestGrab:
         assert finished["title"] == "The Album"
         assert finished["detail"] == "delivered 2/3 tracks; failed: Bad One: nope"
         assert finished["inbox_state"] == "waiting"
+        assert calls[0] == {"only_tracks": None, "patch_into": None}
+        import json as jsonlib
+        assert jsonlib.loads(finished["failed_tracks"]) == [
+            {"n": 3, "title": "Bad One", "reason": "nope"}]
+
+        # Retry of a done-with-gaps album targets only the failed tracks
+        # and patches into the delivered folder.
+        retried = client.post("/api/jobs/%s/retry" % job["id"]).json()
+        assert retried["stage"] == "queued"
+        recovered = wait_for_stage(client, job["id"])
+        assert recovered["stage"] == "done"
+        assert calls[1]["only_tracks"] == {3}
+        assert str(calls[1]["patch_into"]).endswith("Artist - The Album")
+        assert recovered["detail"] == "retry recovered 1 of 1 failed tracks"
+        assert recovered["failed_tracks"] == ""
 
     def test_invalid_kind_rejected(self, client):
         response = client.post("/api/grab", json={"video_id": "v", "kind": "playlist"})

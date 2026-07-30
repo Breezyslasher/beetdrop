@@ -9,6 +9,7 @@ event loop into the SSE broadcaster.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -18,7 +19,7 @@ from .config import Config, check_inbox
 from .db import Store
 from .download import LogCollector
 from .events import Broadcaster
-from .grab import run_album_grab, run_grab
+from .grab import failures_text, run_album_grab, run_grab
 
 MAX_CONCURRENT_DOWNLOADS = 2
 PROGRESS_MIN_INTERVAL = 0.5  # seconds between persisted progress updates
@@ -108,11 +109,21 @@ class JobManager:
         job = self._store.get_job(job_id)
         if job is None:
             return None
-        if job["stage"] != "failed":
+        if job["stage"] == "failed":
+            job = self._update(job_id, stage="queued", progress=0.0, error="",
+                               detail="", log="", failed_tracks="",
+                               inbox_path="", inbox_state="")
+            self._executor.submit(self._run, job_id)
             return job
-        job = self._update(job_id, stage="queued", progress=0.0, error="",
-                           detail="", log="", inbox_path="", inbox_state="")
-        self._executor.submit(self._run, job_id)
+        if (job["stage"] == "done" and job["kind"] == "album"
+                and job["failed_tracks"]):
+            # Retry only the tracks that failed; failed_tracks and
+            # inbox_path stay so the run knows what to fetch and where
+            # to patch it in.
+            job = self._update(job_id, stage="queued", progress=0.0,
+                               error="", detail="", log="")
+            self._executor.submit(self._run, job_id)
+            return job
         return job
 
     # -- worker thread side --------------------------------------------------
@@ -145,6 +156,19 @@ class JobManager:
         try:
             check_inbox(config.inbox, config.min_free_mb)
             if job["kind"] == "album":
+                only_tracks = None
+                patch_into = None
+                if job["failed_tracks"]:
+                    # This run is a targeted retry of previously failed
+                    # tracks, patched into the delivered folder if it is
+                    # still in the inbox.
+                    try:
+                        previous = json.loads(job["failed_tracks"])
+                    except ValueError:
+                        previous = []
+                    only_tracks = {f.get("n") for f in previous if f.get("n")}
+                    if job["inbox_path"]:
+                        patch_into = Path(job["inbox_path"])
                 outcome = run_album_grab(
                     job["video_id"], config,
                     fmt=job["format"], bitrate=job["bitrate"],
@@ -153,13 +177,21 @@ class JobManager:
                         job_id, title=title, artist=artist),
                     on_detail=on_detail,
                     logger=collector,
+                    only_tracks=only_tracks,
+                    patch_into=patch_into,
                 )
-                total = outcome.delivered + len(outcome.failed)
-                detail = "delivered %d/%d tracks" % (outcome.delivered, total)
+                if only_tracks is not None:
+                    detail = "retry recovered %d of %d failed tracks" % (
+                        outcome.delivered, len(only_tracks))
+                else:
+                    total = outcome.delivered + len(outcome.failed)
+                    detail = "delivered %d/%d tracks" % (outcome.delivered, total)
                 if outcome.failed:
-                    detail += "; failed: " + "; ".join(outcome.failed)
+                    detail += "; still failing: " if only_tracks is not None else "; failed: "
+                    detail += failures_text(outcome.failed)
                 self._update(job_id, stage="done", progress=100.0,
                              detail=detail[:2000], log=collector.text()[:20000],
+                             failed_tracks=json.dumps(outcome.failed) if outcome.failed else "",
                              inbox_path=str(outcome.inbox_path),
                              inbox_state="waiting")
             else:

@@ -50,7 +50,9 @@ class AlbumResult:
 class AlbumLookup:
     album: AlbumResult
     tracks: list[Result]
-    unavailable: list[str] = field(default_factory=list)  # titles with no videoId
+    # Tracks YouTube Music serves without a videoId, as
+    # {"n": track_number, "title": title} so retries can target them.
+    unavailable: list[dict] = field(default_factory=list)
 
 
 def _duration_to_seconds(text) -> Optional[int]:
@@ -157,11 +159,11 @@ def lookup_album(browse_id: str) -> AlbumLookup:
         thumbnail_url=thumbnails[-1]["url"] if thumbnails else "",
     )
     tracks: list[Result] = []
-    unavailable: list[str] = []
+    unavailable: list[dict] = []
     for index, row in enumerate(data.get("tracks") or [], start=1):
         raw_title = row.get("title", "")
         if not row.get("videoId"):
-            unavailable.append(raw_title or ("track %d" % index))
+            unavailable.append({"n": index, "title": raw_title or ("track %d" % index)})
             continue
         track_artists = [a.get("name", "") for a in row.get("artists") or [] if a.get("name")]
         duration = _row_duration(row)

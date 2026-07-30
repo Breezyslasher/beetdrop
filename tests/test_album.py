@@ -52,7 +52,7 @@ class TestLookupAlbumParsing:
         assert lookup.tracks[0].title == "One"  # cleaned
         assert lookup.tracks[1].duration_seconds == 245  # parsed from "4:05"
         assert lookup.tracks[1].artists == ["Artist A"]  # falls back to album artist
-        assert lookup.unavailable == ["Region Locked"]
+        assert lookup.unavailable == [{"n": 2, "title": "Region Locked"}]
 
 
 def make_lookup(n=3):
@@ -119,8 +119,7 @@ class TestRunAlbumGrab:
         monkeypatch.setattr(grab_module, "download_audio", flaky_download)
         outcome = run_album_grab("b1", config)
         assert outcome.delivered == 2
-        assert len(outcome.failed) == 1
-        assert "Track 2" in outcome.failed[0]
+        assert outcome.failed == [{"n": 2, "title": "Track 2", "reason": "video unavailable"}]
         names = sorted(p.name for p in outcome.inbox_path.iterdir())
         assert names == ["01 - Track 1.opus", "03 - Track 3.opus"]
 
@@ -150,3 +149,51 @@ class TestRunAlbumGrab:
         assert stages == ["searching", "downloading", "moving"]
         assert details[0] == "track 1/3: Track 1"
         assert details[-1] == "track 3/3: Track 3"
+
+
+class TestAlbumRetry:
+    def test_only_tracks_limits_the_run(self, album_env):
+        config, seeds = album_env
+        outcome = run_album_grab("b1", config, only_tracks={2})
+        assert outcome.delivered == 1
+        names = [p.name for p in outcome.inbox_path.iterdir()]
+        assert names == ["02 - Track 2.opus"]
+        assert [s.tracknumber for s in seeds] == [2]
+
+    def test_patch_into_existing_folder(self, album_env):
+        config, seeds = album_env
+        existing = config.inbox / "Artist - The Album"
+        existing.mkdir()
+        (existing / "01 - Track 1.opus").write_bytes(b"already-there")
+        outcome = run_album_grab("b1", config, only_tracks={2, 3},
+                                 patch_into=existing)
+        assert outcome.inbox_path == existing
+        names = sorted(p.name for p in existing.iterdir())
+        assert names == ["01 - Track 1.opus", "02 - Track 2.opus", "03 - Track 3.opus"]
+        # Existing files are never overwritten.
+        assert (existing / "01 - Track 1.opus").read_bytes() == b"already-there"
+        # No temp files left behind.
+        assert not [p for p in existing.iterdir() if p.name.startswith(".")]
+
+    def test_patch_target_gone_delivers_new_folder(self, album_env):
+        config, seeds = album_env
+        gone = config.inbox / "Artist - The Album"  # never created
+        outcome = run_album_grab("b1", config, only_tracks={2},
+                                 patch_into=gone)
+        assert outcome.inbox_path == config.inbox / "Artist - The Album"
+        assert [p.name for p in outcome.inbox_path.iterdir()] == ["02 - Track 2.opus"]
+
+    def test_zero_recoveries_is_a_result_not_an_error(self, album_env, monkeypatch):
+        config, seeds = album_env
+
+        def dead_download(video_id, scratch_dir, **kwargs):
+            raise DownloadError("still broken")
+
+        monkeypatch.setattr(grab_module, "download_audio", dead_download)
+        existing = config.inbox / "Artist - The Album"
+        existing.mkdir()
+        outcome = run_album_grab("b1", config, only_tracks={2},
+                                 patch_into=existing)
+        assert outcome.delivered == 0
+        assert outcome.failed[0]["n"] == 2
+        assert outcome.inbox_path == existing

@@ -16,9 +16,13 @@ from typing import Optional
 
 JOB_COLUMNS = (
     "id", "video_id", "kind", "title", "artist", "format", "bitrate",
-    "stage", "progress", "error", "detail", "log", "inbox_path", "inbox_state",
-    "created_at", "updated_at",
+    "stage", "progress", "error", "detail", "log", "failed_tracks",
+    "inbox_path", "inbox_state", "created_at", "updated_at",
 )
+
+# failed_tracks is a JSON list of {"n": track_number, "title", "reason"}
+# for album jobs that finished with gaps; it is what "Retry failed
+# tracks" re-attempts.
 
 # kind is "track" or "album". For album jobs the video_id column carries
 # the YouTube Music album browseId; detail carries per-track progress
@@ -57,6 +61,7 @@ class Store:
                 " error TEXT NOT NULL DEFAULT '',"
                 " detail TEXT NOT NULL DEFAULT '',"
                 " log TEXT NOT NULL DEFAULT '',"
+                " failed_tracks TEXT NOT NULL DEFAULT '',"
                 " inbox_path TEXT NOT NULL DEFAULT '',"
                 " inbox_state TEXT NOT NULL DEFAULT '',"
                 " created_at REAL NOT NULL,"
@@ -68,6 +73,7 @@ class Store:
                 ("kind", "TEXT NOT NULL DEFAULT 'track'"),
                 ("detail", "TEXT NOT NULL DEFAULT ''"),
                 ("log", "TEXT NOT NULL DEFAULT ''"),
+                ("failed_tracks", "TEXT NOT NULL DEFAULT ''"),
             ):
                 if column not in existing:
                     self._db.execute(
