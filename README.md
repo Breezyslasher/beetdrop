@@ -1,11 +1,17 @@
-# Trackpull
+# Beetdrop
 
 A mobile-first web app with one job: search for a song, download the audio
 from YouTube Music, and drop it into a beets-flask inbox folder so beets
 can tag and file it.
 
-The line is the inbox. Upstream of it is Trackpull. Downstream of it is
-beets. Trackpull does no MusicBrainz lookups, no release disambiguation,
+Formerly named Trackpull. The rename is backward compatible: legacy
+`TRACKPULL_*` environment variables and the `X-Trackpull-Password`
+header are still honored, and an existing trackpull.sqlite3 job
+database is migrated in place on first start. Update the image name to
+`ghcr.io/breezyslasher/beetdrop` and log in again (sessions reset).
+
+The line is the inbox. Upstream of it is Beetdrop. Downstream of it is
+beets. Beetdrop does no MusicBrainz lookups, no release disambiguation,
 no cover art, no library path construction and no lyrics — beets already
 does every one of those things better, and beets-flask already provides a
 mobile web UI for confirming its matches.
@@ -56,8 +62,8 @@ job done and the delivered folder untouched - permanently unavailable
 tracks stay listed so you know what is missing.
 
 ```
-python -m trackpull search "artist album" --albums
-python -m trackpull grab <browse_id> --album
+python -m beetdrop search "artist album" --albums
+python -m beetdrop grab <browse_id> --album
 ```
 
 Success means the file was handed off to the inbox, not that it was
@@ -77,16 +83,16 @@ pip install -r requirements.txt
 ```
 export INBOX_PATH=/path/to/beets/inbox
 
-python -m trackpull search "artist song title"
-python -m trackpull grab <video_id> [--format opus|m4a|mp3] [--inbox PATH]
-python -m trackpull serve [--host 0.0.0.0] [--port 8090]
-python -m trackpull version
+python -m beetdrop search "artist song title"
+python -m beetdrop grab <video_id> [--format opus|m4a|mp3] [--inbox PATH]
+python -m beetdrop serve [--host 0.0.0.0] [--port 8090]
+python -m beetdrop version
 ```
 
-Environment variables: `INBOX_PATH`, `TRACKPULL_FORMAT`,
-`TRACKPULL_BITRATE` (mp3 only), `TRACKPULL_COOKIES` (path to a cookies
-file for throttled or region-locked content), `TRACKPULL_SCRATCH`,
-`TRACKPULL_CONFIG` (state directory), `TRACKPULL_PASSWORD`.
+Environment variables: `INBOX_PATH`, `BEETDROP_FORMAT`,
+`BEETDROP_BITRATE` (mp3 only), `BEETDROP_COOKIES` (path to a cookies
+file for throttled or region-locked content), `BEETDROP_SCRATCH`,
+`BEETDROP_CONFIG` (state directory), `BEETDROP_PASSWORD`.
 
 ## Web UI
 
@@ -114,7 +120,7 @@ at runtime, so the app works on a LAN without internet access.
 beets-flask ships with a placeholder inbox ("/music/dummy"); until it
 is replaced, it reports "Path /music/dummy does not exist or is no
 directory". In beets-flask's beets config.yaml, point an inbox folder
-at the same host directory Trackpull writes to, as mounted inside the
+at the same host directory Beetdrop writes to, as mounted inside the
 beets-flask container:
 
 ```
@@ -123,20 +129,20 @@ directory: /music/library
 gui:
   inbox:
     folders:
-      trackpull:
-        name: "Trackpull inbox"
+      beetdrop:
+        name: "Beetdrop inbox"
         path: /music/inbox
         autotag: preview
 ```
 
-The container-side paths do not need to match Trackpull's /inbox; both
+The container-side paths do not need to match Beetdrop's /inbox; both
 containers just have to mount the same host folder. Keep PUID/PGID
-consistent between the two containers so beets can move what Trackpull
+consistent between the two containers so beets can move what Beetdrop
 writes.
 
 ## Handoff watching
 
-After a grab lands, Trackpull keeps an eye on the folder it delivered -
+After a grab lands, Beetdrop keeps an eye on the folder it delivered -
 watching the inbox only, never beets' database. When the folder leaves
 the inbox the job shows "Picked up by beets". If it is still sitting
 there after a grace period (5 minutes), the job is flagged "Not
@@ -170,7 +176,7 @@ Stages: queued, searching, downloading, extracting, tagging, moving,
 done, failed.
 
 Auth is an optional single shared password (set via settings or
-`TRACKPULL_PASSWORD`), hardened enough to sit behind a Cloudflare
+`BEETDROP_PASSWORD`), hardened enough to sit behind a Cloudflare
 tunnel or other internet-facing proxy:
 
 - The password is stored as a salted PBKDF2 hash, never plaintext (a
@@ -181,7 +187,7 @@ tunnel or other internet-facing proxy:
   and never appears in a query string (query strings end up in access
   logs - the old `?password=` parameter is gone). Changing the password
   invalidates every session.
-- Scripts and curl use the `X-Trackpull-Password` header.
+- Scripts and curl use the `X-Beetdrop-Password` header.
 - Failed attempts are throttled per client (5 in 15 minutes, keyed by
   `CF-Connecting-IP` behind Cloudflare), after which logins answer 429.
 - All responses carry nosniff/frame-deny/no-referrer headers, and shell
@@ -196,7 +202,7 @@ tunnel or reverse proxy's job.
 - Jobs still queued when the process restarts simply run on startup;
   only jobs that were mid-download are marked failed (retryable).
 - Grabs are refused up front when the inbox filesystem has less than
-  `TRACKPULL_MIN_FREE_MB` (default 512) free, and /api/health reports
+  `BEETDROP_MIN_FREE_MB` (default 512) free, and /api/health reports
   the free space - running out of disk mid-album otherwise surfaces as
   a confusing error after the download already happened.
 - /api/health reports failures_last_hour; a wave of failures usually
@@ -214,17 +220,17 @@ tunnel or reverse proxy's job.
   409 with the existing job; the UI asks before grabbing again, and the
   API takes force: true to override.
 - Terminal jobs are pruned once they are BOTH older than
-  TRACKPULL_KEEP_DAYS (default 30) and beyond the newest
-  TRACKPULL_KEEP_JOBS (default 200).
+  BEETDROP_KEEP_DAYS (default 30) and beyond the newest
+  BEETDROP_KEEP_JOBS (default 200).
 - Album tracks download with a randomized pause between them
-  (TRACKPULL_TRACK_DELAY, default "2-5" seconds) - back-to-back
+  (BEETDROP_TRACK_DELAY, default "2-5" seconds) - back-to-back
   downloads look bot-like to YouTube's throttling.
 - Cookies for throttled or region-locked videos can be pasted straight
   into Settings (stored as a file in /config, mode 600); an uploaded
-  cookie file wins over the TRACKPULL_COOKIES mount. Clearing removes
+  cookie file wins over the BEETDROP_COOKIES mount. Clearing removes
   the file.
 - Concurrent download workers are settable 1-4 (Settings or
-  TRACKPULL_CONCURRENCY, default 2); the change applies on the next
+  BEETDROP_CONCURRENCY, default 2); the change applies on the next
   container restart.
 
 FLAC and WAV are not offered: YouTube Music's source ceiling is roughly
@@ -241,9 +247,9 @@ docker compose up -d
 See docker-compose.yml for the volume and PUID/PGID wiring; the inbox
 volume must resolve to the same path beets-flask watches. The image is
 published to GitHub Container Registry as
-`ghcr.io/breezyslasher/trackpull` (latest and per-version tags) by the
+`ghcr.io/breezyslasher/beetdrop` (latest and per-version tags) by the
 publish-docker workflow on every push to main that touches the app or
-the Dockerfile. Set `TRACKPULL_SELFUPDATE=1` to refresh yt-dlp at
+the Dockerfile. Set `BEETDROP_SELFUPDATE=1` to refresh yt-dlp at
 container start; the resolved version is always visible in
 /api/settings and /api/health.
 

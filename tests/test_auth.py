@@ -5,8 +5,8 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from trackpull.app import create_app
-from trackpull.auth import (
+from beetdrop.app import create_app
+from beetdrop.auth import (
     LoginThrottle,
     check_session_token,
     hash_password,
@@ -15,8 +15,8 @@ from trackpull.auth import (
     make_session_token,
     verify_password,
 )
-from trackpull.config import Config
-from trackpull.db import Store
+from beetdrop.config import Config
+from beetdrop.db import Store
 
 
 def make_config(tmp_path, **overrides):
@@ -39,7 +39,7 @@ class TestHashing:
         assert hash_password("x") != hash_password("x")
 
     def test_plaintext_fallback_constant_time_path(self):
-        # The TRACKPULL_PASSWORD env var arrives as plaintext.
+        # The BEETDROP_PASSWORD env var arrives as plaintext.
         assert verify_password("secret", "secret")
         assert not verify_password("secret", "other")
         assert not verify_password("anything", "")
@@ -127,9 +127,38 @@ class TestMigrationAndEnv:
         config = make_config(tmp_path, password="from-env")
         with TestClient(create_app(config)) as client:
             assert client.get("/api/jobs").status_code == 401
-            assert client.get("/api/jobs", headers={"X-Trackpull-Password": "from-env"}).status_code == 200
+            assert client.get("/api/jobs", headers={"X-Beetdrop-Password": "from-env"}).status_code == 200
             assert client.post("/api/login", json={"password": "from-env"}).status_code == 200
             assert client.get("/api/jobs").status_code == 200
+
+
+class TestRenameCompat:
+    def test_legacy_password_header_accepted(self, tmp_path):
+        config = make_config(tmp_path, password="pw")
+        with TestClient(create_app(config)) as client:
+            assert client.get("/api/jobs", headers={"X-Trackpull-Password": "pw"}).status_code == 200
+            assert client.get("/api/jobs", headers={"X-Beetdrop-Password": "pw"}).status_code == 200
+
+    def test_legacy_env_vars_still_honored(self, monkeypatch):
+        monkeypatch.setenv("TRACKPULL_FORMAT", "mp3")
+        monkeypatch.delenv("BEETDROP_FORMAT", raising=False)
+        assert Config().output_format == "mp3"
+        # The new name wins when both are set.
+        monkeypatch.setenv("BEETDROP_FORMAT", "m4a")
+        assert Config().output_format == "m4a"
+
+    def test_legacy_database_file_migrates(self, tmp_path):
+        config = make_config(tmp_path)
+        config.config_dir.mkdir(parents=True, exist_ok=True)
+        legacy = config.config_dir / "trackpull.sqlite3"
+        store = Store(legacy)
+        job = store.create_job("v-legacy", "opus", "192")
+        store.close()
+        # Resolving db_path migrates the file; history survives.
+        path = config.db_path
+        assert path.name == "beetdrop.sqlite3"
+        assert not legacy.exists()
+        assert Store(path).get_job(job["id"])["video_id"] == "v-legacy"
 
 
 class TestSecurityHeaders:

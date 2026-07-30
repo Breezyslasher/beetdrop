@@ -1,10 +1,10 @@
-/* Trackpull UI logic. Vue 3 global build, no build step.
+/* Beetdrop UI logic. Vue 3 global build, no build step.
    The layout setting is a client preference and lives in localStorage;
    everything else round-trips through the API. */
 
 const { createApp } = Vue;
 
-const LS_LAYOUT = "trackpull.layout";
+const LS_LAYOUT = "beetdrop.layout";
 const MOBILE_QUERY = "(max-width: 700px)";
 
 createApp({
@@ -32,7 +32,8 @@ createApp({
       passwordInput: "",
       passwordError: "",
 
-      layout: localStorage.getItem(LS_LAYOUT) || "auto",
+      layout: localStorage.getItem(LS_LAYOUT)
+        || localStorage.getItem("trackpull.layout") || "auto",
       mediaMobile: window.matchMedia(MOBILE_QUERY).matches,
 
       toast: "",
@@ -178,7 +179,7 @@ createApp({
         const previous = this.jobs[index];
         this.jobs[index] = job;
         // Success message says handed off, not imported: whether it
-        // imports is beets' decision and Trackpull does not know.
+        // imports is beets' decision and Beetdrop does not know.
         if (previous.stage !== "done" && job.stage === "done") {
           this.showToast("Handed off to inbox: " + (job.title || job.video_id));
         }

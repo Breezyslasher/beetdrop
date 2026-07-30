@@ -7,12 +7,12 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-import trackpull.jobs as jobs_module
-from trackpull.app import create_app
-from trackpull.config import Config
-from trackpull.events import QUEUE_LIMIT, Broadcaster, sse_format
-from trackpull.grab import GrabOutcome
-from trackpull.search import Result
+import beetdrop.jobs as jobs_module
+from beetdrop.app import create_app
+from beetdrop.config import Config
+from beetdrop.events import QUEUE_LIMIT, Broadcaster, sse_format
+from beetdrop.grab import GrabOutcome
+from beetdrop.search import Result
 
 
 def make_result(video_id="vid-1"):
@@ -125,7 +125,7 @@ class TestGrab:
         assert response.status_code == 422
 
     def test_album_grab_lifecycle(self, client, monkeypatch):
-        from trackpull.grab import AlbumGrabOutcome
+        from beetdrop.grab import AlbumGrabOutcome
 
         calls = []
 
@@ -205,17 +205,17 @@ class TestPassword:
         client.put("/api/settings", json={"password": "hunter2"})
         assert client.get("/api/jobs").status_code == 401
         assert client.get("/api/health").status_code == 200
-        assert client.get("/api/jobs", headers={"X-Trackpull-Password": "hunter2"}).status_code == 200
+        assert client.get("/api/jobs", headers={"X-Beetdrop-Password": "hunter2"}).status_code == 200
         # The password is never accepted in a query string: query strings
         # end up in access logs.
         assert client.get("/api/jobs", params={"password": "hunter2"}).status_code == 401
-        assert client.get("/api/jobs", headers={"X-Trackpull-Password": "wrong"}).status_code == 401
+        assert client.get("/api/jobs", headers={"X-Beetdrop-Password": "wrong"}).status_code == 401
 
     def test_login_sets_session_cookie(self, client):
         client.put("/api/settings", json={"password": "hunter2"})
         response = client.post("/api/login", json={"password": "hunter2"})
         assert response.status_code == 200
-        assert "trackpull_session" in response.cookies
+        assert "beetdrop_session" in response.cookies
         # TestClient carries the cookie jar forward.
         assert client.get("/api/jobs").status_code == 200
 
@@ -225,7 +225,7 @@ class TestPassword:
 
     def test_password_stored_hashed(self, client):
         client.put("/api/settings", json={"password": "hunter2"})
-        from trackpull.db import Store
+        from beetdrop.db import Store
         stored = Store(client.config.db_path).get_settings()["password"]
         assert "hunter2" not in stored
         assert stored.startswith("pbkdf2:sha256:")
@@ -235,13 +235,13 @@ class TestPassword:
         client.post("/api/login", json={"password": "hunter2"})
         assert client.get("/api/jobs").status_code == 200
         client.put("/api/settings", json={"password": "different"},
-                   headers={"X-Trackpull-Password": "hunter2"})
+                   headers={"X-Beetdrop-Password": "hunter2"})
         assert client.get("/api/jobs").status_code == 401
 
 
 class TestSearch:
     def test_search_normalised_shape(self, client, monkeypatch):
-        import trackpull.app as app_module
+        import beetdrop.app as app_module
 
         monkeypatch.setattr(app_module, "search_songs", lambda q, limit: [make_result()])
         body = client.get("/api/search", params={"q": "anything"}).json()

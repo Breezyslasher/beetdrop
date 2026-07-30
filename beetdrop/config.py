@@ -11,6 +11,13 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
+def _env(name: str, default: str) -> str:
+    """BEETDROP_* wins; the legacy TRACKPULL_* name is still honored so
+    existing deployments survive the rename."""
+    return os.environ.get("BEETDROP_" + name,
+                          os.environ.get("TRACKPULL_" + name, default))
+
+
 # FLAC and WAV are deliberately absent: YouTube Music's source ceiling is
 # roughly 160 kbps Opus or 256 kbps AAC, so a lossless container would be a
 # larger file carrying no additional information.
@@ -24,25 +31,25 @@ class InboxError(RuntimeError):
 @dataclass
 class Config:
     inbox: Path = field(default_factory=lambda: Path(os.environ.get("INBOX_PATH", "/inbox")))
-    scratch_root: Path = field(default_factory=lambda: Path(os.environ.get("TRACKPULL_SCRATCH", "/tmp/trackpull")))
-    config_dir: Path = field(default_factory=lambda: Path(os.environ.get("TRACKPULL_CONFIG", "~/.config/trackpull")).expanduser())
-    output_format: str = field(default_factory=lambda: os.environ.get("TRACKPULL_FORMAT", "opus"))
-    bitrate: str = field(default_factory=lambda: os.environ.get("TRACKPULL_BITRATE", "192"))
-    cookies_file: str = field(default_factory=lambda: os.environ.get("TRACKPULL_COOKIES", ""))
-    password: str = field(default_factory=lambda: os.environ.get("TRACKPULL_PASSWORD", ""))
+    scratch_root: Path = field(default_factory=lambda: Path(_env("SCRATCH", "/tmp/beetdrop")))
+    config_dir: Path = field(default_factory=lambda: Path(_env("CONFIG", "~/.config/beetdrop")).expanduser())
+    output_format: str = field(default_factory=lambda: _env("FORMAT", "opus"))
+    bitrate: str = field(default_factory=lambda: _env("BITRATE", "192"))
+    cookies_file: str = field(default_factory=lambda: _env("COOKIES", ""))
+    password: str = field(default_factory=lambda: _env("PASSWORD", ""))
     # Refuse grabs when the inbox filesystem has less than this much free.
     # Running out of disk mid-album otherwise surfaces as a confusing
     # ffmpeg/yt-dlp error after the download already happened.
-    min_free_mb: int = field(default_factory=lambda: int(os.environ.get("TRACKPULL_MIN_FREE_MB", "512")))
+    min_free_mb: int = field(default_factory=lambda: int(_env("MIN_FREE_MB", "512")))
     # Randomized pause between album tracks ("min-max" seconds, or a
     # single number). Back-to-back downloads look bot-like to YouTube's
     # throttling heuristics.
-    track_delay: str = field(default_factory=lambda: os.environ.get("TRACKPULL_TRACK_DELAY", "2-5"))
+    track_delay: str = field(default_factory=lambda: _env("TRACK_DELAY", "2-5"))
     # Concurrent download workers (1-4). Applied at startup.
-    concurrency: int = field(default_factory=lambda: int(os.environ.get("TRACKPULL_CONCURRENCY", "2")))
+    concurrency: int = field(default_factory=lambda: int(_env("CONCURRENCY", "2")))
     # Job history retention: terminal jobs beyond both limits are pruned.
-    keep_jobs: int = field(default_factory=lambda: int(os.environ.get("TRACKPULL_KEEP_JOBS", "200")))
-    keep_days: int = field(default_factory=lambda: int(os.environ.get("TRACKPULL_KEEP_DAYS", "30")))
+    keep_jobs: int = field(default_factory=lambda: int(_env("KEEP_JOBS", "200")))
+    keep_days: int = field(default_factory=lambda: int(_env("KEEP_DAYS", "30")))
 
     def track_delay_range(self) -> tuple:
         try:
@@ -57,7 +64,15 @@ class Config:
 
     @property
     def db_path(self) -> Path:
-        return self.config_dir / "trackpull.sqlite3"
+        new = self.config_dir / "beetdrop.sqlite3"
+        legacy = self.config_dir / "trackpull.sqlite3"
+        if legacy.is_file() and not new.exists():
+            # Pre-rename state: carry the job history and settings over.
+            try:
+                os.replace(legacy, new)
+            except OSError:
+                return legacy
+        return new
 
 
 def inbox_free_mb(inbox: Path) -> int:

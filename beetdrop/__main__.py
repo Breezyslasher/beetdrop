@@ -1,8 +1,8 @@
 """CLI.
 
-    python -m trackpull search "query"
-    python -m trackpull grab <video_id> [--format opus|m4a|mp3]
-    python -m trackpull serve [--host 0.0.0.0] [--port 8090]
+    python -m beetdrop search "query"
+    python -m beetdrop grab <video_id> [--format opus|m4a|mp3]
+    python -m beetdrop serve [--host 0.0.0.0] [--port 8090]
 """
 
 from __future__ import annotations
@@ -97,12 +97,12 @@ def cmd_serve(args, config: Config) -> int:
 
 def cmd_version(args, config: Config) -> int:
     from . import __version__
-    print("trackpull %s (yt-dlp %s)" % (__version__, ytdlp_version()))
+    print("beetdrop %s (yt-dlp %s)" % (__version__, ytdlp_version()))
     return 0
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(prog="trackpull")
+    parser = argparse.ArgumentParser(prog="beetdrop")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_search = sub.add_parser("search", help="search YouTube Music songs or albums")
@@ -124,7 +124,7 @@ def main(argv=None) -> int:
     p_serve.add_argument("--port", type=int, default=8090)
     p_serve.set_defaults(func=cmd_serve)
 
-    p_version = sub.add_parser("version", help="show trackpull and yt-dlp versions")
+    p_version = sub.add_parser("version", help="show beetdrop and yt-dlp versions")
     p_version.set_defaults(func=cmd_version)
 
     args = parser.parse_args(argv)

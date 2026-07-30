@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 
-import trackpull.grab as grab_module
-import trackpull.search as search_module
-from trackpull.config import Config
-from trackpull.download import DownloadError
-from trackpull.grab import run_album_grab
-from trackpull.search import AlbumLookup, AlbumResult, Result, _duration_to_seconds
+import beetdrop.grab as grab_module
+import beetdrop.search as search_module
+from beetdrop.config import Config
+from beetdrop.download import DownloadError
+from beetdrop.grab import run_album_grab
+from beetdrop.search import AlbumLookup, AlbumResult, Result, _duration_to_seconds
 
 
 class TestDurationParse:

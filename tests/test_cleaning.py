@@ -1,6 +1,6 @@
 """Title cleaning: noise goes, meaning-changing qualifiers stay."""
 
-from trackpull.cleaning import clean_title
+from beetdrop.cleaning import clean_title
 
 
 class TestNoiseStripped:

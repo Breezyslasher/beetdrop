@@ -37,7 +37,7 @@ def deliver(staged_dir: Path, inbox: Path, folder_name: str, cross_fs: bool) -> 
 
     # Different filesystems: copy into a hidden temp dir inside the inbox,
     # then rename within the same filesystem.
-    hidden = inbox / (".%s.trackpull-tmp" % destination.name)
+    hidden = inbox / (".%s.beetdrop-tmp" % destination.name)
     if hidden.exists():
         shutil.rmtree(hidden)
     try:

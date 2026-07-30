@@ -3,9 +3,9 @@
 import shutil
 import sqlite3
 
-from trackpull.db import Store
-from trackpull.events import Broadcaster
-from trackpull.jobs import JobManager
+from beetdrop.db import Store
+from beetdrop.events import Broadcaster
+from beetdrop.jobs import JobManager
 
 
 def make_manager(tmp_path):
