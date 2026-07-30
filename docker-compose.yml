@@ -1,20 +1,55 @@
-# Shares the inbox volume with beets-flask; both containers must resolve
-# the same path.
+# Trackpull
+#
+# The /inbox volume must resolve to the same folder beets-flask watches;
+# both containers see the same path. Set PUID/PGID to the user that owns
+# that share so beets and the host can read what Trackpull writes.
+#
+#   docker compose up -d
+#   docker compose logs -f trackpull
+
 services:
   trackpull:
     image: ghcr.io/breezyslasher/trackpull:latest
     container_name: trackpull
     restart: unless-stopped
+
     ports:
       - "8090:8090"
+
     volumes:
-      - /srv/dev-disk-by-uuid-XXXX/appdata/trackpull:/config
-      - /srv/dev-disk-by-uuid-XXXX/Media/inbox:/inbox
-      # - /srv/dev-disk-by-uuid-XXXX/appdata/trackpull/cookies.txt:/config/cookies.txt:ro
+      # Persistent state: settings, job history (SQLite)
+      - ./config:/config
+      # beets-flask inbox - point this at the SAME host folder beets-flask
+      # watches, e.g. /srv/dev-disk-by-uuid-XXXX/Media/inbox
+      - ./inbox:/inbox
+      # Optional: cookies for throttled or region-locked content
+      # - ./config/cookies.txt:/config/cookies.txt:ro
+
     environment:
+      # User/group that owns the inbox share
       - PUID=1000
       - PGID=1000
       - TZ=America/New_York
       - INBOX_PATH=/inbox
+
+      # Optional: refresh yt-dlp on every container start. Worth enabling
+      # when grabs start failing en masse after a YouTube change.
       # - TRACKPULL_SELFUPDATE=1
+
+      # Optional: default output format (opus, m4a, mp3) and mp3 bitrate;
+      # both can also be changed at runtime in Settings.
+      # - TRACKPULL_FORMAT=opus
+      # - TRACKPULL_BITRATE=192
+
+      # Optional: single shared password for the API/UI
+      # - TRACKPULL_PASSWORD=changeme
+
+      # Optional: cookies file (mount it above as well)
       # - TRACKPULL_COOKIES=/config/cookies.txt
+
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/api/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

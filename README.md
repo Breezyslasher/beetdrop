@@ -109,6 +109,7 @@ container start; the resolved version is always visible in
 ## Tests
 
 ```
+pip install -r requirements-dev.txt
 python -m pytest tests/
 ```
 
