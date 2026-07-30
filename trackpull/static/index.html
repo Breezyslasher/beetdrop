@@ -117,6 +117,8 @@
         <pre>{{ j.log }}</pre>
       </details>
       <button v-if="j.stage === 'failed'" class="retry" type="button" @click="retry(j)">Retry</button>
+      <button v-if="j.stage === 'done' && j.kind === 'album' && j.failed_tracks"
+              class="retry" type="button" @click="retry(j)">Retry failed tracks</button>
       <p v-if="j.stage === 'done' && j.inbox_state === 'picked_up'" class="handoff">
         Picked up by beets
       </p>

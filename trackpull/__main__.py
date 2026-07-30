@@ -67,7 +67,9 @@ def cmd_grab(args, config: Config) -> int:
             )
             if outcome.failed:
                 for failure in outcome.failed:
-                    print("failed: %s" % failure, file=sys.stderr)
+                    print("failed: track %s - %s: %s" % (
+                        failure.get("n", "?"), failure.get("title", "?"),
+                        failure.get("reason", "?")), file=sys.stderr)
             print("done: %d tracks handed off to %s" % (outcome.delivered, outcome.inbox_path))
             return 0
         outcome = run_grab(
