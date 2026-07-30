@@ -13,8 +13,8 @@ from pathlib import Path
 
 from .config import SUPPORTED_FORMATS, Config, InboxError, check_inbox
 from .download import DownloadError, ytdlp_version
-from .grab import run_grab
-from .search import search_songs
+from .grab import run_album_grab, run_grab
+from .search import search_albums, search_songs
 
 
 def _format_duration(seconds) -> str:
@@ -24,6 +24,20 @@ def _format_duration(seconds) -> str:
 
 
 def cmd_search(args, config: Config) -> int:
+    if args.albums:
+        albums = search_albums(args.query, limit=args.limit)
+        if not albums:
+            print("no results")
+            return 1
+        for album in albums:
+            print("%s  %s - %s (%s%s)" % (
+                album.browse_id,
+                album.artist_display or "?",
+                album.title,
+                album.year or "?",
+                (", " + album.album_type) if album.album_type else "",
+            ))
+        return 0
     results = search_songs(args.query, limit=args.limit)
     if not results:
         print("no results")
@@ -43,6 +57,19 @@ def cmd_search(args, config: Config) -> int:
 def cmd_grab(args, config: Config) -> int:
     try:
         check_inbox(config.inbox)
+        if args.album:
+            outcome = run_album_grab(
+                args.video_id, config,
+                fmt=args.format or "", bitrate=args.bitrate or "",
+                on_stage=lambda stage: print("stage: %s" % stage),
+                on_resolved=lambda title, artist: print("resolved: %s - %s" % (artist, title)),
+                on_detail=lambda text: print(text),
+            )
+            if outcome.failed:
+                for failure in outcome.failed:
+                    print("failed: %s" % failure, file=sys.stderr)
+            print("done: %d tracks handed off to %s" % (outcome.delivered, outcome.inbox_path))
+            return 0
         outcome = run_grab(
             args.video_id, config,
             fmt=args.format or "", bitrate=args.bitrate or "",
@@ -76,13 +103,15 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="trackpull")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_search = sub.add_parser("search", help="search YouTube Music songs")
+    p_search = sub.add_parser("search", help="search YouTube Music songs or albums")
     p_search.add_argument("query")
     p_search.add_argument("--limit", type=int, default=8)
+    p_search.add_argument("--albums", action="store_true", help="search albums instead of songs")
     p_search.set_defaults(func=cmd_search)
 
-    p_grab = sub.add_parser("grab", help="download one video and hand it to the inbox")
-    p_grab.add_argument("video_id")
+    p_grab = sub.add_parser("grab", help="download one video or album and hand it to the inbox")
+    p_grab.add_argument("video_id", help="videoId, or an album browseId with --album")
+    p_grab.add_argument("--album", action="store_true", help="treat the id as an album browseId")
     p_grab.add_argument("--format", choices=SUPPORTED_FORMATS, help="output format (default opus)")
     p_grab.add_argument("--bitrate", help="bitrate for mp3 transcodes")
     p_grab.add_argument("--inbox", help="inbox path (overrides INBOX_PATH)")

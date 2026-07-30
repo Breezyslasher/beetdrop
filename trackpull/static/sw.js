@@ -2,7 +2,7 @@
    instantly from a home screen. API responses and the SSE stream are
    never cached - job state and search results must always be live. */
 
-const CACHE = "trackpull-shell-v1";
+const CACHE = "trackpull-shell-v2";
 const SHELL = [
   "/",
   "/static/style.css",

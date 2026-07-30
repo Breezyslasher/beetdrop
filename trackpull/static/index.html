@@ -27,11 +27,20 @@
   </header>
 
   <form class="searchbar" @submit.prevent="search">
-    <input v-model="query" type="search" inputmode="search" enterkeyhint="search"
-           placeholder="Search a song..." autocomplete="off" autocapitalize="off">
-    <button type="submit" class="primary" :disabled="searching || !query.trim()">
-      {{ searching ? 'Searching' : 'Search' }}
-    </button>
+    <div class="modetoggle" role="group" aria-label="Search type">
+      <button type="button" :class="{active: searchType === 'songs'}"
+              @click="setSearchType('songs')">Songs</button>
+      <button type="button" :class="{active: searchType === 'albums'}"
+              @click="setSearchType('albums')">Albums</button>
+    </div>
+    <div class="searchrow">
+      <input v-model="query" type="search" inputmode="search" enterkeyhint="search"
+             :placeholder="searchType === 'albums' ? 'Search an album...' : 'Search a song...'"
+             autocomplete="off" autocapitalize="off">
+      <button type="submit" class="primary" :disabled="searching || !query.trim()">
+        {{ searching ? 'Searching' : 'Search' }}
+      </button>
+    </div>
   </form>
 
   <main class="results">
@@ -41,19 +50,36 @@
     </p>
     <p v-if="searched && !searching && !results.length" class="hint">No results.</p>
 
-    <article v-for="r in results" :key="r.video_id" class="card">
-      <img v-if="r.thumbnail_url" class="thumb" :src="r.thumbnail_url" alt="" loading="lazy">
-      <div v-else class="thumb thumb-blank"></div>
-      <div class="meta">
-        <span class="title" :title="r.raw_title">{{ r.title }}</span>
-        <span class="artist">{{ r.artists.join(', ') || 'Unknown artist' }}<template v-if="r.album"> &middot; {{ r.album }}</template></span>
-        <span class="duration">{{ fmtDuration(r.duration_seconds) }}</span>
-      </div>
-      <button class="grab primary" type="button" @click="grab(r)"
-              :disabled="grabbing[r.video_id]">
-        {{ grabbing[r.video_id] ? 'Queued' : 'Grab' }}
-      </button>
-    </article>
+    <template v-if="resultsType === 'songs'">
+      <article v-for="r in results" :key="r.video_id" class="card">
+        <img v-if="r.thumbnail_url" class="thumb" :src="r.thumbnail_url" alt="" loading="lazy">
+        <div v-else class="thumb thumb-blank"></div>
+        <div class="meta">
+          <span class="title" :title="r.raw_title">{{ r.title }}</span>
+          <span class="artist">{{ r.artists.join(', ') || 'Unknown artist' }}<template v-if="r.album"> &middot; {{ r.album }}</template></span>
+          <span class="duration">{{ fmtDuration(r.duration_seconds) }}</span>
+        </div>
+        <button class="grab primary" type="button" @click="grab(r, 'track')"
+                :disabled="grabbing[r.video_id]">
+          {{ grabbing[r.video_id] ? 'Queued' : 'Grab' }}
+        </button>
+      </article>
+    </template>
+    <template v-else>
+      <article v-for="a in results" :key="a.browse_id" class="card">
+        <img v-if="a.thumbnail_url" class="thumb" :src="a.thumbnail_url" alt="" loading="lazy">
+        <div v-else class="thumb thumb-blank"></div>
+        <div class="meta">
+          <span class="title">{{ a.title }}</span>
+          <span class="artist">{{ a.artists.join(', ') || 'Unknown artist' }}</span>
+          <span class="duration">{{ a.year || '?' }}<template v-if="a.album_type"> &middot; {{ a.album_type }}</template></span>
+        </div>
+        <button class="grab primary" type="button" @click="grab(a, 'album')"
+                :disabled="grabbing[a.browse_id]">
+          {{ grabbing[a.browse_id] ? 'Queued' : 'Grab' }}
+        </button>
+      </article>
+    </template>
   </main>
 
   <div v-if="toast" class="toast" @click="toast=''">{{ toast }}</div>
@@ -71,9 +97,11 @@
         <span class="stage" :class="'stage-' + j.stage">{{ j.stage }}</span>
       </div>
       <div class="job-line job-sub">
-        <span v-if="j.artist" class="job-artist">{{ j.artist }}</span>
+        <span v-if="j.artist" class="job-artist">{{ j.artist }}<template v-if="j.kind === 'album'"> &middot; album</template></span>
         <span v-if="j.stage === 'downloading'" class="pct">{{ Math.round(j.progress) }}%</span>
       </div>
+      <p v-if="j.detail && !['done','failed'].includes(j.stage)" class="job-detail">{{ j.detail }}</p>
+      <p v-if="j.detail && j.stage === 'done'" class="job-detail">{{ j.detail }}</p>
       <div v-if="!['done','failed'].includes(j.stage)" class="bar">
         <div class="bar-fill" :style="{width: j.progress + '%'}"></div>
       </div>

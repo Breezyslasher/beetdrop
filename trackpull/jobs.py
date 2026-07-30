@@ -17,7 +17,7 @@ from typing import Callable, Optional
 from .config import Config, check_inbox
 from .db import Store
 from .events import Broadcaster
-from .grab import run_grab
+from .grab import run_album_grab, run_grab
 
 MAX_CONCURRENT_DOWNLOADS = 2
 PROGRESS_MIN_INTERVAL = 0.5  # seconds between persisted progress updates
@@ -88,10 +88,12 @@ class JobManager:
             if job["stage"] not in ("done", "failed")
         )
 
-    def enqueue(self, video_id: str, fmt: str = "", bitrate: str = "") -> dict:
+    def enqueue(self, video_id: str, fmt: str = "", bitrate: str = "",
+                kind: str = "track") -> dict:
         config = self._config_provider()
         job = self._store.create_job(
-            video_id, fmt or config.output_format, bitrate or config.bitrate
+            video_id, fmt or config.output_format, bitrate or config.bitrate,
+            kind=kind,
         )
         self._publish(job)
         self._executor.submit(self._run, job["id"])
@@ -104,7 +106,7 @@ class JobManager:
         if job["stage"] != "failed":
             return job
         job = self._update(job_id, stage="queued", progress=0.0, error="",
-                           inbox_path="", inbox_state="")
+                           detail="", inbox_path="", inbox_state="")
         self._executor.submit(self._run, job_id)
         return job
 
@@ -129,19 +131,36 @@ class JobManager:
             last_progress["value"] = pct
             self._update(job_id, progress=round(pct, 1))
 
-        def on_resolved(result) -> None:
-            self._update(job_id, title=result.title, artist=result.artist_display)
-
         try:
             check_inbox(config.inbox)
-            outcome = run_grab(
-                job["video_id"], config,
-                fmt=job["format"], bitrate=job["bitrate"],
-                on_stage=on_stage, on_progress=on_progress, on_resolved=on_resolved,
-            )
-            self._update(job_id, stage="done", progress=100.0,
-                         inbox_path=str(outcome.inbox_path),
-                         inbox_state="waiting")
+            if job["kind"] == "album":
+                outcome = run_album_grab(
+                    job["video_id"], config,
+                    fmt=job["format"], bitrate=job["bitrate"],
+                    on_stage=on_stage, on_progress=on_progress,
+                    on_resolved=lambda title, artist: self._update(
+                        job_id, title=title, artist=artist),
+                    on_detail=lambda text: self._update(job_id, detail=text),
+                )
+                total = outcome.delivered + len(outcome.failed)
+                detail = "delivered %d/%d tracks" % (outcome.delivered, total)
+                if outcome.failed:
+                    detail += "; failed: " + "; ".join(outcome.failed)
+                self._update(job_id, stage="done", progress=100.0,
+                             detail=detail[:2000],
+                             inbox_path=str(outcome.inbox_path),
+                             inbox_state="waiting")
+            else:
+                outcome = run_grab(
+                    job["video_id"], config,
+                    fmt=job["format"], bitrate=job["bitrate"],
+                    on_stage=on_stage, on_progress=on_progress,
+                    on_resolved=lambda result: self._update(
+                        job_id, title=result.title, artist=result.artist_display),
+                )
+                self._update(job_id, stage="done", progress=100.0,
+                             inbox_path=str(outcome.inbox_path),
+                             inbox_state="waiting")
         except Exception as exc:
             self._update(job_id, stage="failed", error=str(exc)[:2000])
 

@@ -15,10 +15,15 @@ from pathlib import Path
 from typing import Optional
 
 JOB_COLUMNS = (
-    "id", "video_id", "title", "artist", "format", "bitrate",
-    "stage", "progress", "error", "inbox_path", "inbox_state",
+    "id", "video_id", "kind", "title", "artist", "format", "bitrate",
+    "stage", "progress", "error", "detail", "inbox_path", "inbox_state",
     "created_at", "updated_at",
 )
+
+# kind is "track" or "album". For album jobs the video_id column carries
+# the YouTube Music album browseId; detail carries per-track progress
+# text ("track 3/12: Title") and, when some tracks fail, the delivered
+# count.
 
 # inbox_state tracks what happened after the handoff, by watching the
 # inbox only (never beets' database): "" (not applicable yet),
@@ -42,6 +47,7 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS jobs ("
                 " id TEXT PRIMARY KEY,"
                 " video_id TEXT NOT NULL,"
+                " kind TEXT NOT NULL DEFAULT 'track',"
                 " title TEXT NOT NULL DEFAULT '',"
                 " artist TEXT NOT NULL DEFAULT '',"
                 " format TEXT NOT NULL,"
@@ -49,16 +55,22 @@ class Store:
                 " stage TEXT NOT NULL DEFAULT 'queued',"
                 " progress REAL NOT NULL DEFAULT 0,"
                 " error TEXT NOT NULL DEFAULT '',"
+                " detail TEXT NOT NULL DEFAULT '',"
                 " inbox_path TEXT NOT NULL DEFAULT '',"
                 " inbox_state TEXT NOT NULL DEFAULT '',"
                 " created_at REAL NOT NULL,"
                 " updated_at REAL NOT NULL)"
             )
             existing = {row[1] for row in self._db.execute("PRAGMA table_info(jobs)")}
-            if "inbox_state" not in existing:
-                self._db.execute(
-                    "ALTER TABLE jobs ADD COLUMN inbox_state TEXT NOT NULL DEFAULT ''"
-                )
+            for column, definition in (
+                ("inbox_state", "TEXT NOT NULL DEFAULT ''"),
+                ("kind", "TEXT NOT NULL DEFAULT 'track'"),
+                ("detail", "TEXT NOT NULL DEFAULT ''"),
+            ):
+                if column not in existing:
+                    self._db.execute(
+                        "ALTER TABLE jobs ADD COLUMN %s %s" % (column, definition)
+                    )
             self._db.execute(
                 "CREATE TABLE IF NOT EXISTS settings ("
                 " key TEXT PRIMARY KEY,"
@@ -72,14 +84,14 @@ class Store:
 
     # -- jobs ----------------------------------------------------------------
 
-    def create_job(self, video_id: str, fmt: str, bitrate: str) -> dict:
+    def create_job(self, video_id: str, fmt: str, bitrate: str, kind: str = "track") -> dict:
         job_id = uuid.uuid4().hex[:12]
         now = time.time()
         with self._lock:
             self._db.execute(
-                "INSERT INTO jobs (id, video_id, format, bitrate, stage,"
-                " created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', ?, ?)",
-                (job_id, video_id, fmt, bitrate, now, now),
+                "INSERT INTO jobs (id, video_id, kind, format, bitrate, stage,"
+                " created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)",
+                (job_id, video_id, kind, fmt, bitrate, now, now),
             )
             self._db.commit()
         return self.get_job(job_id)
