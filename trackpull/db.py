@@ -1,0 +1,123 @@
+"""SQLite state: recent jobs and settings.
+
+One connection guarded by a lock, safe to call from the event loop and
+from download worker threads alike. Jobs persist across restarts so the
+queue view can be rebuilt on page load.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+import threading
+import time
+import uuid
+from pathlib import Path
+from typing import Optional
+
+JOB_COLUMNS = (
+    "id", "video_id", "title", "artist", "format", "bitrate",
+    "stage", "progress", "error", "inbox_path", "created_at", "updated_at",
+)
+
+# Settings the API may read and write. yt-dlp version is reported
+# read-only by the settings endpoint and lives nowhere.
+SETTING_KEYS = ("output_format", "bitrate", "inbox", "password")
+
+
+class Store:
+    def __init__(self, path: Path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._db = sqlite3.connect(str(path), check_same_thread=False)
+        self._db.row_factory = sqlite3.Row
+        self._lock = threading.Lock()
+        with self._lock:
+            self._db.execute(
+                "CREATE TABLE IF NOT EXISTS jobs ("
+                " id TEXT PRIMARY KEY,"
+                " video_id TEXT NOT NULL,"
+                " title TEXT NOT NULL DEFAULT '',"
+                " artist TEXT NOT NULL DEFAULT '',"
+                " format TEXT NOT NULL,"
+                " bitrate TEXT NOT NULL,"
+                " stage TEXT NOT NULL DEFAULT 'queued',"
+                " progress REAL NOT NULL DEFAULT 0,"
+                " error TEXT NOT NULL DEFAULT '',"
+                " inbox_path TEXT NOT NULL DEFAULT '',"
+                " created_at REAL NOT NULL,"
+                " updated_at REAL NOT NULL)"
+            )
+            self._db.execute(
+                "CREATE TABLE IF NOT EXISTS settings ("
+                " key TEXT PRIMARY KEY,"
+                " value TEXT NOT NULL)"
+            )
+            self._db.commit()
+
+    def close(self) -> None:
+        with self._lock:
+            self._db.close()
+
+    # -- jobs ----------------------------------------------------------------
+
+    def create_job(self, video_id: str, fmt: str, bitrate: str) -> dict:
+        job_id = uuid.uuid4().hex[:12]
+        now = time.time()
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO jobs (id, video_id, format, bitrate, stage,"
+                " created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', ?, ?)",
+                (job_id, video_id, fmt, bitrate, now, now),
+            )
+            self._db.commit()
+        return self.get_job(job_id)
+
+    def update_job(self, job_id: str, **fields) -> Optional[dict]:
+        allowed = {k: v for k, v in fields.items() if k in JOB_COLUMNS and k != "id"}
+        if not allowed:
+            return self.get_job(job_id)
+        allowed["updated_at"] = time.time()
+        assignments = ", ".join("%s = ?" % k for k in allowed)
+        with self._lock:
+            self._db.execute(
+                "UPDATE jobs SET %s WHERE id = ?" % assignments,
+                (*allowed.values(), job_id),
+            )
+            self._db.commit()
+        return self.get_job(job_id)
+
+    def get_job(self, job_id: str) -> Optional[dict]:
+        with self._lock:
+            row = self._db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        return dict(row) if row else None
+
+    def list_jobs(self, limit: int = 50) -> list[dict]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def interrupted_jobs(self) -> list[dict]:
+        """Jobs that were mid-flight when the process died."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM jobs WHERE stage NOT IN ('done', 'failed')"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    # -- settings ------------------------------------------------------------
+
+    def get_settings(self) -> dict:
+        with self._lock:
+            rows = self._db.execute("SELECT key, value FROM settings").fetchall()
+        return {row["key"]: row["value"] for row in rows if row["key"] in SETTING_KEYS}
+
+    def set_settings(self, values: dict) -> None:
+        items = [(k, str(v)) for k, v in values.items() if k in SETTING_KEYS]
+        if not items:
+            return
+        with self._lock:
+            self._db.executemany(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", items
+            )
+            self._db.commit()

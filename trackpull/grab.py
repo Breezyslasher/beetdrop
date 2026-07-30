@@ -3,6 +3,9 @@
 The success outcome is "handed off to the inbox", not "imported" —
 whether and how the file imports is beets' decision, and Trackpull does
 not know.
+
+Stage and progress callbacks exist so the web layer's job queue can
+mirror the pipeline; the CLI passes simple printers.
 """
 
 from __future__ import annotations
@@ -20,6 +23,10 @@ from .paths import grab_folder_name
 from .search import Result, lookup_video
 from .seedtags import seed_from_result, verify_audio, write_seed_tags
 
+# Stage labels, in pipeline order. "queued", "done" and "failed" are owned
+# by the job layer.
+STAGES = ("searching", "downloading", "extracting", "tagging", "moving")
+
 
 @dataclass
 class GrabOutcome:
@@ -27,8 +34,8 @@ class GrabOutcome:
     result: Result
 
 
-def _log_default(message: str) -> None:
-    print(message)
+def _noop(*args) -> None:
+    pass
 
 
 def run_grab(
@@ -36,35 +43,49 @@ def run_grab(
     config: Config,
     fmt: str = "",
     bitrate: str = "",
-    log: Callable[[str], None] = _log_default,
-    progress_hook: Optional[Callable[[dict], None]] = None,
+    on_stage: Callable[[str], None] = _noop,
+    on_progress: Callable[[float], None] = _noop,
+    on_resolved: Callable[[Result], None] = _noop,
 ) -> GrabOutcome:
     fmt = fmt or config.output_format
     bitrate = bitrate or config.bitrate
 
     job_id = uuid.uuid4().hex[:12]
     scratch = config.scratch_root / job_id
-    cross_fs_probe = config.scratch_root
-    cross_fs_probe.mkdir(parents=True, exist_ok=True)
-    cross_fs = not same_filesystem(cross_fs_probe, config.inbox)
+    config.scratch_root.mkdir(parents=True, exist_ok=True)
+    cross_fs = not same_filesystem(config.scratch_root, config.inbox)
 
-    log("stage: searching")
+    on_stage("searching")
     result = lookup_video(video_id)
-    log("resolved: %s - %s (%ss)" % (result.artist_display or "?", result.title, result.duration_seconds))
+    on_resolved(result)
+
+    def progress_hook(data: dict) -> None:
+        if data.get("status") != "downloading":
+            return
+        total = data.get("total_bytes") or data.get("total_bytes_estimate")
+        downloaded = data.get("downloaded_bytes")
+        if total and downloaded is not None:
+            on_progress(min(100.0, downloaded / total * 100.0))
+
+    def postprocessor_hook(data: dict) -> None:
+        if data.get("status") == "started":
+            on_stage("extracting")
 
     try:
-        log("stage: downloading")
+        on_stage("downloading")
         audio_path = download_audio(
             video_id, scratch, fmt=fmt, bitrate=bitrate,
-            cookies_file=config.cookies_file, progress_hook=progress_hook,
+            cookies_file=config.cookies_file,
+            progress_hook=progress_hook,
+            postprocessor_hook=postprocessor_hook,
         )
 
-        log("stage: tagging")
+        on_stage("tagging")
         verify_audio(audio_path)
         seed = seed_from_result(result)
         write_seed_tags(audio_path, seed)
 
-        log("stage: moving")
+        on_stage("moving")
         folder_name = grab_folder_name(seed.albumartist, seed.title)
         # Stage the final one-grab-one-folder unit inside scratch, then
         # hand the whole directory off in a single rename.
@@ -76,5 +97,4 @@ def run_grab(
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
-    log("done: handed off to %s" % destination)
     return GrabOutcome(inbox_path=destination, result=result)

@@ -3,3 +3,5 @@
 yt-dlp
 ytmusicapi>=1.5
 mutagen>=1.47
+fastapi>=0.110
+uvicorn[standard]>=0.29

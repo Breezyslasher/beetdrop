@@ -1,7 +1,8 @@
-"""Phase 1 CLI.
+"""CLI.
 
     python -m trackpull search "query"
     python -m trackpull grab <video_id> [--format opus|m4a|mp3]
+    python -m trackpull serve [--host 0.0.0.0] [--port 8090]
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from .config import SUPPORTED_FORMATS, Config, check_inbox
+from .config import SUPPORTED_FORMATS, Config, InboxError, check_inbox
 from .download import DownloadError, ytdlp_version
 from .grab import run_grab
 from .search import search_songs
@@ -40,12 +41,28 @@ def cmd_search(args, config: Config) -> int:
 
 
 def cmd_grab(args, config: Config) -> int:
-    check_inbox(config.inbox)
     try:
-        run_grab(args.video_id, config, fmt=args.format or "", bitrate=args.bitrate or "")
-    except (DownloadError, ValueError) as exc:
+        check_inbox(config.inbox)
+        outcome = run_grab(
+            args.video_id, config,
+            fmt=args.format or "", bitrate=args.bitrate or "",
+            on_stage=lambda stage: print("stage: %s" % stage),
+            on_resolved=lambda r: print("resolved: %s - %s (%ss)" % (
+                r.artist_display or "?", r.title, r.duration_seconds)),
+        )
+    except (DownloadError, ValueError, InboxError) as exc:
         print("error: %s" % exc, file=sys.stderr)
         return 1
+    print("done: handed off to %s" % outcome.inbox_path)
+    return 0
+
+
+def cmd_serve(args, config: Config) -> int:
+    import uvicorn
+
+    from .app import create_app
+
+    uvicorn.run(create_app(config), host=args.host, port=args.port, log_level="info")
     return 0
 
 
@@ -70,6 +87,11 @@ def main(argv=None) -> int:
     p_grab.add_argument("--bitrate", help="bitrate for mp3 transcodes")
     p_grab.add_argument("--inbox", help="inbox path (overrides INBOX_PATH)")
     p_grab.set_defaults(func=cmd_grab)
+
+    p_serve = sub.add_parser("serve", help="run the web API")
+    p_serve.add_argument("--host", default="0.0.0.0")
+    p_serve.add_argument("--port", type=int, default=8090)
+    p_serve.set_defaults(func=cmd_serve)
 
     p_version = sub.add_parser("version", help="show trackpull and yt-dlp versions")
     p_version.set_defaults(func=cmd_version)

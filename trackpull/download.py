@@ -33,6 +33,7 @@ def download_audio(
     bitrate: str = "192",
     cookies_file: str = "",
     progress_hook: Optional[Callable[[dict], None]] = None,
+    postprocessor_hook: Optional[Callable[[dict], None]] = None,
 ) -> Path:
     """Download bestaudio into scratch_dir, extract to fmt, and return the
     produced file path."""
@@ -57,6 +58,8 @@ def download_audio(
         ydl_opts["cookiefile"] = cookies_file
     if progress_hook:
         ydl_opts["progress_hooks"] = [progress_hook]
+    if postprocessor_hook:
+        ydl_opts["postprocessor_hooks"] = [postprocessor_hook]
 
     url = "https://music.youtube.com/watch?v=%s" % video_id
     try:

@@ -10,8 +10,8 @@ no cover art, no library path construction and no lyrics — beets already
 does every one of those things better, and beets-flask already provides a
 mobile web UI for confirming its matches.
 
-Current status: Phase 1 (CLI, no web layer). FastAPI, the UI, and the
-Docker image follow in later phases.
+Current status: Phase 2 (CLI plus web API). The UI and the Docker image
+follow in later phases.
 
 ## What a grab does
 
@@ -49,12 +49,42 @@ export INBOX_PATH=/path/to/beets/inbox
 
 python -m trackpull search "artist song title"
 python -m trackpull grab <video_id> [--format opus|m4a|mp3] [--inbox PATH]
+python -m trackpull serve [--host 0.0.0.0] [--port 8090]
 python -m trackpull version
 ```
 
 Environment variables: `INBOX_PATH`, `TRACKPULL_FORMAT`,
 `TRACKPULL_BITRATE` (mp3 only), `TRACKPULL_COOKIES` (path to a cookies
-file for throttled or region-locked content), `TRACKPULL_SCRATCH`.
+file for throttled or region-locked content), `TRACKPULL_SCRATCH`,
+`TRACKPULL_CONFIG` (state directory), `TRACKPULL_PASSWORD`.
+
+## Web API
+
+`serve` runs the FastAPI app:
+
+```
+GET  /api/search?q=&limit=        songs search, normalised results
+POST /api/grab                    {"video_id": ..., "format": ..., "bitrate": ...}
+GET  /api/jobs                    recent jobs from SQLite
+POST /api/jobs/{id}/retry         re-run a failed job
+GET  /api/settings                includes read-only yt-dlp version
+PUT  /api/settings                output_format, bitrate, inbox, password
+GET  /api/health                  inbox writability, yt-dlp version
+GET  /events                      SSE stream of job state changes
+```
+
+Downloads run in a background worker capped at two concurrent grabs;
+searches run separately and never wait behind a download. Job state
+persists in SQLite, so the queue survives restarts (jobs that were
+mid-flight when the process died are marked failed and can be retried).
+Stages: queued, searching, downloading, extracting, tagging, moving,
+done, failed.
+
+Auth is an optional single shared password (set via settings or
+`TRACKPULL_PASSWORD`), supplied as an `X-Trackpull-Password` header or a
+`password` query parameter (for EventSource). `/api/health` stays open
+so container healthchecks work. No TLS: this is a LAN tool that sits
+behind whatever reverse proxy already exists.
 
 FLAC and WAV are not offered: YouTube Music's source ceiling is roughly
 160 kbps Opus or 256 kbps AAC, so a lossless container would be a larger
