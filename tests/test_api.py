@@ -34,7 +34,7 @@ def client(tmp_path, monkeypatch):
 
     def fake_run_grab(video_id, cfg, fmt="", bitrate="",
                       on_stage=lambda s: None, on_progress=lambda p: None,
-                      on_resolved=lambda r: None):
+                      on_resolved=lambda r: None, logger=None):
         result = make_result(video_id)
         on_stage("searching")
         on_resolved(result)
@@ -129,7 +129,8 @@ class TestGrab:
 
         def fake_album_grab(browse_id, cfg, fmt="", bitrate="",
                             on_stage=lambda s: None, on_progress=lambda p: None,
-                            on_resolved=lambda t, a: None, on_detail=lambda d: None):
+                            on_resolved=lambda t, a: None, on_detail=lambda d: None,
+                            logger=None):
             on_stage("searching")
             on_resolved("The Album", "Artist")
             on_stage("downloading")

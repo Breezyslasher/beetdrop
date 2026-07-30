@@ -105,6 +105,14 @@ input, select {
   display: flex;
   gap: 6px;
 }
+.formatpick {
+  flex: 1.2;
+  min-height: 36px;
+  padding: 0 8px;
+  font-size: 14px;
+  color: var(--muted);
+  width: auto;
+}
 .modetoggle button {
   flex: 1;
   min-height: 36px;
@@ -244,6 +252,19 @@ input, select {
 .bar-fill { height: 100%; background: var(--accent); transition: width 0.3s; }
 
 .error { color: var(--danger); font-size: 14px; margin: 8px 0 6px; word-break: break-word; }
+.joblog { margin: 6px 0; }
+.joblog summary { color: var(--muted); font-size: 13px; cursor: pointer; }
+.joblog pre {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 12px;
+  max-height: 40vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .handoff { color: var(--ok); font-size: 14px; margin: 6px 0 0; }
 .handoff-review { color: var(--warn); font-size: 14px; margin: 6px 0 0; }
 .retry { min-height: 36px; padding: 0 14px; }

@@ -16,7 +16,7 @@ from typing import Optional
 
 JOB_COLUMNS = (
     "id", "video_id", "kind", "title", "artist", "format", "bitrate",
-    "stage", "progress", "error", "detail", "inbox_path", "inbox_state",
+    "stage", "progress", "error", "detail", "log", "inbox_path", "inbox_state",
     "created_at", "updated_at",
 )
 
@@ -56,6 +56,7 @@ class Store:
                 " progress REAL NOT NULL DEFAULT 0,"
                 " error TEXT NOT NULL DEFAULT '',"
                 " detail TEXT NOT NULL DEFAULT '',"
+                " log TEXT NOT NULL DEFAULT '',"
                 " inbox_path TEXT NOT NULL DEFAULT '',"
                 " inbox_state TEXT NOT NULL DEFAULT '',"
                 " created_at REAL NOT NULL,"
@@ -66,6 +67,7 @@ class Store:
                 ("inbox_state", "TEXT NOT NULL DEFAULT ''"),
                 ("kind", "TEXT NOT NULL DEFAULT 'track'"),
                 ("detail", "TEXT NOT NULL DEFAULT ''"),
+                ("log", "TEXT NOT NULL DEFAULT ''"),
             ):
                 if column not in existing:
                     self._db.execute(
@@ -129,6 +131,17 @@ class Store:
                 "SELECT * FROM jobs WHERE stage NOT IN ('done', 'failed')"
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def count_failed_since(self, seconds: float) -> int:
+        """Failed jobs in the trailing window - a wave of these usually
+        means yt-dlp needs updating."""
+        cutoff = time.time() - seconds
+        with self._lock:
+            row = self._db.execute(
+                "SELECT COUNT(*) FROM jobs WHERE stage = 'failed' AND updated_at > ?",
+                (cutoff,),
+            ).fetchone()
+        return int(row[0])
 
     # -- settings ------------------------------------------------------------
 

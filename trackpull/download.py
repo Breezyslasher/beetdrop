@@ -8,10 +8,40 @@ must — which in practice means the mp3 compatibility option.
 
 from __future__ import annotations
 
+from collections import deque
 from pathlib import Path
 from typing import Callable, Optional
 
 import yt_dlp
+
+
+class LogCollector:
+    """Ring buffer that satisfies yt-dlp's logger interface. Keeps the
+    last N lines so a failed job can show what led up to the failure."""
+
+    def __init__(self, limit: int = 80):
+        self._lines: deque = deque(maxlen=limit)
+
+    def add(self, message) -> None:
+        text = str(message).strip()
+        if text:
+            self._lines.append(text[:300])
+
+    # yt-dlp logger interface
+    def debug(self, message) -> None:
+        self.add(message)
+
+    def info(self, message) -> None:
+        self.add(message)
+
+    def warning(self, message) -> None:
+        self.add("WARNING: %s" % message)
+
+    def error(self, message) -> None:
+        self.add("ERROR: %s" % message)
+
+    def text(self) -> str:
+        return "\n".join(self._lines)
 
 # Steer the selector toward the container that lets ExtractAudio copy
 # instead of transcode.
@@ -34,6 +64,7 @@ def download_audio(
     cookies_file: str = "",
     progress_hook: Optional[Callable[[dict], None]] = None,
     postprocessor_hook: Optional[Callable[[dict], None]] = None,
+    logger: Optional[LogCollector] = None,
 ) -> Path:
     """Download bestaudio into scratch_dir, extract to fmt, and return the
     produced file path."""
@@ -60,6 +91,8 @@ def download_audio(
         ydl_opts["progress_hooks"] = [progress_hook]
     if postprocessor_hook:
         ydl_opts["postprocessor_hooks"] = [postprocessor_hook]
+    if logger is not None:
+        ydl_opts["logger"] = logger
 
     url = "https://music.youtube.com/watch?v=%s" % video_id
     try:

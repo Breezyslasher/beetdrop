@@ -31,7 +31,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import __version__
-from .config import SUPPORTED_FORMATS, Config, inbox_problem
+from .config import SUPPORTED_FORMATS, Config, inbox_free_mb, inbox_problem
 from .db import Store
 from .download import ytdlp_version
 from .events import Broadcaster, sse_format
@@ -163,15 +163,49 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
     @app.get("/api/health")
     async def api_health():
         config = effective_config()
-        problem = inbox_problem(config.inbox)
+        problem = inbox_problem(config.inbox, config.min_free_mb)
         return {
             "status": "ok" if not problem else "degraded",
             "inbox": str(config.inbox),
             "inbox_writable": not problem,
             "inbox_problem": problem,
+            "inbox_free_mb": inbox_free_mb(config.inbox),
+            "min_free_mb": config.min_free_mb,
             "ytdlp_version": ytdlp_version(),
             "version": __version__,
             "active_jobs": manager.active_count(),
+            # A wave of these usually means yt-dlp needs updating.
+            "failures_last_hour": store.count_failed_since(3600),
+        }
+
+    @app.post("/api/ytdlp/update", dependencies=[protected])
+    async def api_ytdlp_update():
+        """Update the installed yt-dlp package. The running process keeps
+        the already-imported version; a container restart loads the new
+        one, which the response says explicitly rather than pretending."""
+        loaded = ytdlp_version()
+
+        def upgrade():
+            import subprocess
+            import sys
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--no-cache-dir",
+                 "--upgrade", "yt-dlp"],
+                capture_output=True, text=True, timeout=300,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.strip()[-500:] or "pip failed")
+            from importlib.metadata import version
+            return version("yt-dlp")
+
+        try:
+            installed = await asyncio.to_thread(upgrade)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="update failed: %s" % exc)
+        return {
+            "loaded_version": loaded,
+            "installed_version": installed,
+            "restart_needed": installed != loaded,
         }
 
     @app.get("/events", dependencies=[protected])

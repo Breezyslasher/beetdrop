@@ -56,7 +56,7 @@ def cmd_search(args, config: Config) -> int:
 
 def cmd_grab(args, config: Config) -> int:
     try:
-        check_inbox(config.inbox)
+        check_inbox(config.inbox, config.min_free_mb)
         if args.album:
             outcome = run_album_grab(
                 args.video_id, config,

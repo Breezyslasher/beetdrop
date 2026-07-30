@@ -16,6 +16,7 @@ from typing import Callable, Optional
 
 from .config import Config, check_inbox
 from .db import Store
+from .download import LogCollector
 from .events import Broadcaster
 from .grab import run_album_grab, run_grab
 
@@ -43,11 +44,15 @@ class JobManager:
 
     def start(self) -> None:
         self._loop = asyncio.get_running_loop()
-        # Jobs that were mid-flight when the process last died can never
-        # finish; surface that honestly instead of showing them stuck.
+        # Jobs that never started can simply run now; jobs that were
+        # mid-flight when the process died cannot finish and are surfaced
+        # honestly instead of showing them stuck.
         for job in self._store.interrupted_jobs():
-            self._update(job["id"], stage="failed",
-                         error="interrupted by restart; retry to run again")
+            if job["stage"] == "queued":
+                self._executor.submit(self._run, job["id"])
+            else:
+                self._update(job["id"], stage="failed",
+                             error="interrupted by restart; retry to run again")
         self._sweep_task = self._loop.create_task(self._sweep_loop())
 
     def shutdown(self) -> None:
@@ -106,7 +111,7 @@ class JobManager:
         if job["stage"] != "failed":
             return job
         job = self._update(job_id, stage="queued", progress=0.0, error="",
-                           detail="", inbox_path="", inbox_state="")
+                           detail="", log="", inbox_path="", inbox_state="")
         self._executor.submit(self._run, job_id)
         return job
 
@@ -118,8 +123,10 @@ class JobManager:
             return
         config = self._config_provider()
         last_progress = {"at": 0.0, "value": -1.0}
+        collector = LogCollector()
 
         def on_stage(stage: str) -> None:
+            collector.add("stage: %s" % stage)
             self._update(job_id, stage=stage)
 
         def on_progress(pct: float) -> None:
@@ -131,8 +138,12 @@ class JobManager:
             last_progress["value"] = pct
             self._update(job_id, progress=round(pct, 1))
 
+        def on_detail(text: str) -> None:
+            collector.add(text)
+            self._update(job_id, detail=text)
+
         try:
-            check_inbox(config.inbox)
+            check_inbox(config.inbox, config.min_free_mb)
             if job["kind"] == "album":
                 outcome = run_album_grab(
                     job["video_id"], config,
@@ -140,14 +151,15 @@ class JobManager:
                     on_stage=on_stage, on_progress=on_progress,
                     on_resolved=lambda title, artist: self._update(
                         job_id, title=title, artist=artist),
-                    on_detail=lambda text: self._update(job_id, detail=text),
+                    on_detail=on_detail,
+                    logger=collector,
                 )
                 total = outcome.delivered + len(outcome.failed)
                 detail = "delivered %d/%d tracks" % (outcome.delivered, total)
                 if outcome.failed:
                     detail += "; failed: " + "; ".join(outcome.failed)
                 self._update(job_id, stage="done", progress=100.0,
-                             detail=detail[:2000],
+                             detail=detail[:2000], log=collector.text()[:20000],
                              inbox_path=str(outcome.inbox_path),
                              inbox_state="waiting")
             else:
@@ -157,12 +169,16 @@ class JobManager:
                     on_stage=on_stage, on_progress=on_progress,
                     on_resolved=lambda result: self._update(
                         job_id, title=result.title, artist=result.artist_display),
+                    logger=collector,
                 )
                 self._update(job_id, stage="done", progress=100.0,
+                             log=collector.text()[:20000],
                              inbox_path=str(outcome.inbox_path),
                              inbox_state="waiting")
         except Exception as exc:
-            self._update(job_id, stage="failed", error=str(exc)[:2000])
+            collector.add("ERROR: %s" % exc)
+            self._update(job_id, stage="failed", error=str(exc)[:2000],
+                         log=collector.text()[:20000])
 
     # -- plumbing --------------------------------------------------------------
 

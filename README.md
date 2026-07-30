@@ -165,6 +165,24 @@ Auth is an optional single shared password (set via settings or
 so container healthchecks work. No TLS: this is a LAN tool that sits
 behind whatever reverse proxy already exists.
 
+## Operations
+
+- Jobs still queued when the process restarts simply run on startup;
+  only jobs that were mid-download are marked failed (retryable).
+- Grabs are refused up front when the inbox filesystem has less than
+  `TRACKPULL_MIN_FREE_MB` (default 512) free, and /api/health reports
+  the free space - running out of disk mid-album otherwise surfaces as
+  a confusing error after the download already happened.
+- /api/health reports failures_last_hour; a wave of failures usually
+  means YouTube changed something and yt-dlp needs updating. Settings
+  has an "Update yt-dlp" button (POST /api/ytdlp/update); the new
+  version loads on the next container restart, and the response says
+  so rather than pretending.
+- Failed jobs keep the last lines of yt-dlp output, shown as an
+  expandable log in the queue.
+- The format picker next to the search field overrides the output
+  format for individual grabs without touching the saved setting.
+
 FLAC and WAV are not offered: YouTube Music's source ceiling is roughly
 160 kbps Opus or 256 kbps AAC, so a lossless container would be a larger
 file carrying no additional information and would make the library

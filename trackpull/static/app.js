@@ -13,11 +13,13 @@ createApp({
     return {
       query: "",
       searchType: "songs",
+      grabFormat: "",
       results: [],
       resultsType: "songs",
       searching: false,
       searched: false,
       grabbing: {},
+      updatingYtdlp: false,
 
       jobs: [],
       queueOpen: false,
@@ -123,10 +125,12 @@ createApp({
     async grab(result, kind) {
       const id = kind === "album" ? result.browse_id : result.video_id;
       this.grabbing[id] = true;
+      const payload = { video_id: id, kind: kind };
+      if (this.grabFormat) payload.format = this.grabFormat;
       try {
         const job = await this.api("/api/grab", {
           method: "POST",
-          body: JSON.stringify({ video_id: id, kind: kind }),
+          body: JSON.stringify(payload),
         });
         this.upsertJob(job);
         this.showToast("Queued: " + result.title);
@@ -245,6 +249,23 @@ createApp({
 
     saveLayout() {
       localStorage.setItem(LS_LAYOUT, this.layout);
+    },
+
+    async updateYtdlp() {
+      this.updatingYtdlp = true;
+      try {
+        const body = await this.api("/api/ytdlp/update", { method: "POST" });
+        if (body.restart_needed) {
+          this.showToast("yt-dlp " + body.installed_version +
+            " installed; restart the container to load it");
+        } else {
+          this.showToast("yt-dlp is already up to date (" + body.loaded_version + ")");
+        }
+      } catch (err) {
+        if (err.message !== "password required") this.showToast("Update failed: " + err.message);
+      } finally {
+        this.updatingYtdlp = false;
+      }
     },
 
     submitPassword() {
