@@ -1,8 +1,13 @@
-name: Publish Trackpull image
+name: Build and publish Trackpull image
 
+# push paths are deliberately unfiltered: combining a paths filter with
+# tag triggers silently skips tag builds, and nearly every commit here
+# touches the app anyway.
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
     paths:
       - 'Dockerfile'
       - 'docker/**'
@@ -12,11 +17,30 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE_NAME: trackpull
+  IMAGE: ghcr.io/${{ github.repository_owner }}/trackpull
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run tests
+        run: python -m pytest tests/ -v
+
   publish:
     runs-on: ubuntu-latest
+    needs: test
     permissions:
       contents: read
       packages: write
@@ -38,40 +62,63 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # To also push to Docker Hub, create the repo secrets
-      # DOCKERHUB_USERNAME and DOCKERHUB_TOKEN, then uncomment:
-      # - name: Log in to Docker Hub
-      #   uses: docker/login-action@v3
-      #   with:
-      #     username: ${{ secrets.DOCKERHUB_USERNAME }}
-      #     password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Image tags
-        id: tags
-        run: |
-          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          BASE="ghcr.io/${OWNER}/${IMAGE_NAME}"
-          TAGS="${BASE}:latest,${BASE}:${{ steps.version.outputs.version }}"
-          # For Docker Hub, also append e.g.:
-          # TAGS="$TAGS,${{ secrets.DOCKERHUB_USERNAME }}/${IMAGE_NAME}:latest"
-          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
-          echo "Tags: $TAGS"
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
         with:
-          context: .
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
-          push: true
-          tags: ${{ steps.tags.outputs.tags }}
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.version.outputs.version }},enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=sha
           labels: |
             org.opencontainers.image.title=Trackpull
             org.opencontainers.image.description=Search YouTube Music and drop seed-tagged audio into a beets-flask inbox
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+
+      - name: Build amd64 image for smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: trackpull:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the image
+        run: |
+          mkdir -p "$RUNNER_TEMP/inbox"
+          docker run -d --name trackpull-smoke -p 8090:8090 \
+            -v "$RUNNER_TEMP/inbox:/inbox" \
+            -e PUID=$(id -u) -e PGID=$(id -g) \
+            trackpull:smoke
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8090/api/health > health.json 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          cat health.json
+          grep -q '"status": *"ok"' health.json || { docker logs trackpull-smoke; exit 1; }
+          grep -q '"inbox_writable": *true' health.json || { docker logs trackpull-smoke; exit 1; }
+          docker rm -f trackpull-smoke
+
+      - name: Build and push multi-arch
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
