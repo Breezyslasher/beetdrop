@@ -96,6 +96,7 @@ class TestGrab:
         assert finished["title"] == "Title"
         assert finished["artist"] == "Artist"
         assert finished["inbox_path"].endswith("Artist - Title")
+        assert finished["inbox_state"] == "waiting"
 
     def test_failure_records_error(self, client):
         job = client.post("/api/grab", json={"video_id": "boom"}).json()

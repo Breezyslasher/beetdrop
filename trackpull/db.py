@@ -16,8 +16,15 @@ from typing import Optional
 
 JOB_COLUMNS = (
     "id", "video_id", "title", "artist", "format", "bitrate",
-    "stage", "progress", "error", "inbox_path", "created_at", "updated_at",
+    "stage", "progress", "error", "inbox_path", "inbox_state",
+    "created_at", "updated_at",
 )
+
+# inbox_state tracks what happened after the handoff, by watching the
+# inbox only (never beets' database): "" (not applicable yet),
+# "waiting" (folder handed off, still in the inbox), "picked_up" (folder
+# left the inbox - beets took it), "review" (still in the inbox past the
+# grace period - the match likely needs review in beets-flask).
 
 # Settings the API may read and write. yt-dlp version is reported
 # read-only by the settings endpoint and lives nowhere.
@@ -43,9 +50,15 @@ class Store:
                 " progress REAL NOT NULL DEFAULT 0,"
                 " error TEXT NOT NULL DEFAULT '',"
                 " inbox_path TEXT NOT NULL DEFAULT '',"
+                " inbox_state TEXT NOT NULL DEFAULT '',"
                 " created_at REAL NOT NULL,"
                 " updated_at REAL NOT NULL)"
             )
+            existing = {row[1] for row in self._db.execute("PRAGMA table_info(jobs)")}
+            if "inbox_state" not in existing:
+                self._db.execute(
+                    "ALTER TABLE jobs ADD COLUMN inbox_state TEXT NOT NULL DEFAULT ''"
+                )
             self._db.execute(
                 "CREATE TABLE IF NOT EXISTS settings ("
                 " key TEXT PRIMARY KEY,"

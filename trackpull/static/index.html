@@ -79,7 +79,15 @@
       </div>
       <p v-if="j.stage === 'failed'" class="error">{{ j.error }}</p>
       <button v-if="j.stage === 'failed'" class="retry" type="button" @click="retry(j)">Retry</button>
-      <p v-if="j.stage === 'done'" class="handoff">Handed off to inbox</p>
+      <p v-if="j.stage === 'done' && j.inbox_state === 'picked_up'" class="handoff">
+        Picked up by beets
+      </p>
+      <p v-else-if="j.stage === 'done' && j.inbox_state === 'review'" class="handoff-review">
+        Not auto-imported - review it in beets-flask
+      </p>
+      <p v-else-if="j.stage === 'done'" class="handoff">
+        Handed off to inbox - waiting for beets
+      </p>
     </article>
   </section>
 

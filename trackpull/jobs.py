@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Callable, Optional
 
 from .config import Config, check_inbox
@@ -20,6 +21,13 @@ from .grab import run_grab
 
 MAX_CONCURRENT_DOWNLOADS = 2
 PROGRESS_MIN_INTERVAL = 0.5  # seconds between persisted progress updates
+
+# Handoff watching: a delivered folder that leaves the inbox was picked up
+# by beets; one still sitting there after the grace period was not
+# auto-imported and likely needs review in beets-flask. This only ever
+# looks at the inbox - never at beets' database.
+INBOX_SWEEP_INTERVAL = 30
+INBOX_REVIEW_AFTER = 300  # seconds in the inbox before flagging for review
 
 
 class JobManager:
@@ -31,6 +39,7 @@ class JobManager:
             max_workers=MAX_CONCURRENT_DOWNLOADS, thread_name_prefix="grab"
         )
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._sweep_task: Optional[asyncio.Task] = None
 
     def start(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -39,9 +48,39 @@ class JobManager:
         for job in self._store.interrupted_jobs():
             self._update(job["id"], stage="failed",
                          error="interrupted by restart; retry to run again")
+        self._sweep_task = self._loop.create_task(self._sweep_loop())
 
     def shutdown(self) -> None:
+        if self._sweep_task is not None:
+            self._sweep_task.cancel()
         self._executor.shutdown(wait=False, cancel_futures=True)
+
+    # -- handoff watching ------------------------------------------------------
+
+    async def _sweep_loop(self) -> None:
+        while True:
+            await asyncio.sleep(INBOX_SWEEP_INTERVAL)
+            try:
+                self.sweep_inbox()
+            except Exception:
+                pass  # a failed sweep just means the next one tries again
+
+    def sweep_inbox(self, review_after: float = INBOX_REVIEW_AFTER) -> None:
+        """Update inbox_state for delivered jobs by looking at the inbox.
+
+        Folder gone -> beets picked it up. Folder still present past the
+        grace period -> flag it once for review in beets-flask.
+        """
+        for job in self._store.list_jobs(200):
+            if job["stage"] != "done" or not job["inbox_path"]:
+                continue
+            if job["inbox_state"] == "picked_up":
+                continue
+            if not Path(job["inbox_path"]).exists():
+                self._update(job["id"], inbox_state="picked_up")
+            elif (job["inbox_state"] != "review"
+                    and time.time() - job["updated_at"] > review_after):
+                self._update(job["id"], inbox_state="review")
 
     def active_count(self) -> int:
         return sum(
@@ -64,7 +103,8 @@ class JobManager:
             return None
         if job["stage"] != "failed":
             return job
-        job = self._update(job_id, stage="queued", progress=0.0, error="", inbox_path="")
+        job = self._update(job_id, stage="queued", progress=0.0, error="",
+                           inbox_path="", inbox_state="")
         self._executor.submit(self._run, job_id)
         return job
 
@@ -100,7 +140,8 @@ class JobManager:
                 on_stage=on_stage, on_progress=on_progress, on_resolved=on_resolved,
             )
             self._update(job_id, stage="done", progress=100.0,
-                         inbox_path=str(outcome.inbox_path))
+                         inbox_path=str(outcome.inbox_path),
+                         inbox_state="waiting")
         except Exception as exc:
             self._update(job_id, stage="failed", error=str(exc)[:2000])
 

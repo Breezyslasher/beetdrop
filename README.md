@@ -78,6 +78,44 @@ a minimal service worker caches the shell only, never API responses.
 Vue 3 is vendored as a single file - no build step, no CDN dependency
 at runtime, so the app works on a LAN without internet access.
 
+## Wiring beets-flask
+
+beets-flask ships with a placeholder inbox ("/music/dummy"); until it
+is replaced, it reports "Path /music/dummy does not exist or is no
+directory". In beets-flask's beets config.yaml, point an inbox folder
+at the same host directory Trackpull writes to, as mounted inside the
+beets-flask container:
+
+```
+directory: /music/library
+
+gui:
+  inbox:
+    folders:
+      trackpull:
+        name: "Trackpull inbox"
+        path: /music/inbox
+        autotag: preview
+```
+
+The container-side paths do not need to match Trackpull's /inbox; both
+containers just have to mount the same host folder. Keep PUID/PGID
+consistent between the two containers so beets can move what Trackpull
+writes.
+
+## Handoff watching
+
+After a grab lands, Trackpull keeps an eye on the folder it delivered -
+watching the inbox only, never beets' database. When the folder leaves
+the inbox the job shows "Picked up by beets". If it is still sitting
+there after a grace period (5 minutes), the job is flagged "Not
+auto-imported - review it in beets-flask" and the UI shows a
+notification, since that usually means the match fell below the
+auto-import threshold and is waiting in beets-flask for review. This is
+a heuristic: a folder can also leave the inbox because it was deleted
+by hand, and with auto-import disabled every grab will flag for review
+once the grace period passes.
+
 ## Web API
 
 `serve` runs the FastAPI app:
