@@ -1,0 +1,313 @@
+/* Trackpull UI. Hand-written CSS, custom properties for theming, dark by
+   default. Two layouts driven by a root class: .layout-mobile puts the
+   search bar in the lower half for one-handed phone use; .layout-desktop
+   is the same page in a max-width container with the search bar at the
+   top. The class is set by the layout setting (auto follows screen size). */
+
+:root {
+  --bg: #11151b;
+  --panel: #1a2029;
+  --panel-2: #222a35;
+  --text: #e8edf2;
+  --muted: #8b98a5;
+  --accent: #4da3ff;
+  --accent-press: #3186e4;
+  --danger: #e5534b;
+  --ok: #4ac26b;
+  --border: #2c3642;
+  --radius: 10px;
+  --tap: 44px;
+}
+
+* { box-sizing: border-box; }
+[v-cloak] { display: none; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  min-height: var(--tap);
+  padding: 0 16px;
+  cursor: pointer;
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0b1016;
+  font-weight: 600;
+}
+button.primary:active { background: var(--accent-press); }
+button:disabled { opacity: 0.55; cursor: default; }
+
+input, select {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  min-height: var(--tap);
+  padding: 0 12px;
+  width: 100%;
+}
+
+/* -- header -------------------------------------------------------------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  padding-top: calc(10px + env(safe-area-inset-top));
+}
+.brand { font-weight: 700; font-size: 18px; letter-spacing: 0.02em; }
+.health {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--muted);
+  margin-right: auto;
+}
+.health.ok { background: var(--ok); }
+.health.degraded { background: var(--danger); }
+.iconbtn {
+  min-width: var(--tap);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+}
+
+/* -- search -------------------------------------------------------------- */
+
+.searchbar {
+  display: flex;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--bg);
+}
+.searchbar input { flex: 1; }
+
+/* -- results ------------------------------------------------------------- */
+
+.results { padding: 4px 14px; }
+.hint { color: var(--muted); padding: 12px 4px; }
+
+.card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  margin-bottom: 10px;
+}
+.thumb {
+  width: 56px; height: 56px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex: none;
+  background: var(--panel-2);
+}
+.meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+.artist {
+  color: var(--muted);
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Duration is how the user spots a ten-minute extended mix before
+   wasting a download. Keep it prominent. */
+.duration {
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+.grab { flex: none; min-width: 72px; }
+
+/* -- queue --------------------------------------------------------------- */
+
+.queuebar {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: var(--tap);
+  padding: 6px 16px;
+  padding-bottom: calc(6px + env(safe-area-inset-bottom));
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+  z-index: 20;
+}
+.queuebar-right { color: var(--accent); font-weight: 600; }
+
+.queuepanel {
+  position: fixed;
+  left: 0; right: 0;
+  bottom: calc(var(--tap) + 12px + env(safe-area-inset-bottom));
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  padding: 10px 14px;
+  z-index: 19;
+}
+.job {
+  border-bottom: 1px solid var(--border);
+  padding: 10px 0;
+}
+.job:last-child { border-bottom: none; }
+.job-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+.job-title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.job-sub { color: var(--muted); font-size: 14px; }
+.pct { font-variant-numeric: tabular-nums; }
+.stage { font-size: 13px; color: var(--muted); flex: none; }
+.stage-done { color: var(--ok); }
+.stage-failed { color: var(--danger); }
+.stage-downloading, .stage-extracting, .stage-tagging, .stage-moving,
+.stage-searching { color: var(--accent); }
+
+.bar {
+  height: 4px;
+  background: var(--panel-2);
+  border-radius: 2px;
+  margin-top: 8px;
+  overflow: hidden;
+}
+.bar-fill { height: 100%; background: var(--accent); transition: width 0.3s; }
+
+.error { color: var(--danger); font-size: 14px; margin: 8px 0 6px; word-break: break-word; }
+.handoff { color: var(--ok); font-size: 14px; margin: 6px 0 0; }
+.retry { min-height: 36px; padding: 0 14px; }
+
+/* -- overlays ------------------------------------------------------------ */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 30;
+}
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius) var(--radius) 0 0;
+  padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
+  width: 100%;
+  max-width: 560px;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+.panel h2 { margin: 0 0 14px; font-size: 18px; }
+.panel label {
+  display: block;
+  margin: 12px 0 4px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.panel label input, .panel label select { margin-top: 4px; }
+.note { color: var(--muted); font-size: 13px; margin: 6px 0; }
+.panel-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(var(--tap) + 24px + env(safe-area-inset-bottom));
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 16px;
+  max-width: 90vw;
+  z-index: 25;
+  cursor: pointer;
+}
+
+/* -- mobile layout: one-handed ------------------------------------------- */
+/* Search sits in the lower half, just above the queue bar, so thumb reach
+   covers both the field and the primary action. */
+
+.layout-mobile .searchbar {
+  position: fixed;
+  left: 0; right: 0;
+  bottom: calc(var(--tap) + 12px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  padding-bottom: 10px;
+  z-index: 18;
+}
+.layout-mobile .results {
+  padding-bottom: calc(2 * var(--tap) + 60px + env(safe-area-inset-bottom));
+}
+.layout-mobile .queuepanel {
+  bottom: calc(2 * var(--tap) + 34px + env(safe-area-inset-bottom));
+}
+.layout-mobile .toast {
+  bottom: calc(2 * var(--tap) + 44px + env(safe-area-inset-bottom));
+}
+
+/* -- desktop layout: same page, widened ----------------------------------- */
+
+.layout-desktop .topbar,
+.layout-desktop .searchbar,
+.layout-desktop .results,
+.layout-desktop .queuepanel {
+  max-width: 760px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.layout-desktop .searchbar {
+  position: sticky;
+  top: 0;
+  z-index: 18;
+}
+.layout-desktop .results { padding-bottom: calc(var(--tap) + 40px); }
+.layout-desktop .queuepanel { left: 50%; transform: translateX(-50%); width: 100%; }
+.layout-desktop .overlay { align-items: center; }
+.layout-desktop .panel { border-radius: var(--radius); }

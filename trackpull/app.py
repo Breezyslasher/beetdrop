@@ -26,7 +26,8 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import __version__
@@ -38,6 +39,7 @@ from .jobs import JobManager
 from .search import search_songs
 
 SSE_KEEPALIVE_SECONDS = 15
+STATIC_DIR = Path(__file__).parent / "static"
 
 
 class GrabRequest(BaseModel):
@@ -189,5 +191,25 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
         })
+
+    # -- UI shell ------------------------------------------------------------
+    # The shell is unauthenticated by design: the password guards the API,
+    # and the page itself is what asks for the password. The service worker
+    # must live at the root so its scope covers the whole app.
+
+    @app.get("/", include_in_schema=False)
+    async def index():
+        return FileResponse(STATIC_DIR / "index.html")
+
+    @app.get("/manifest.webmanifest", include_in_schema=False)
+    async def manifest():
+        return FileResponse(STATIC_DIR / "manifest.webmanifest",
+                            media_type="application/manifest+json")
+
+    @app.get("/sw.js", include_in_schema=False)
+    async def service_worker():
+        return FileResponse(STATIC_DIR / "sw.js", media_type="text/javascript")
+
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     return app
