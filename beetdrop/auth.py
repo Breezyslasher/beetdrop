@@ -49,7 +49,7 @@ def is_hashed(stored: str) -> bool:
 
 def verify_password(password: str, stored: str) -> bool:
     """Constant-time verification against either a PBKDF2 hash or a
-    plaintext value (the TRACKPULL_PASSWORD environment variable arrives
+    plaintext value (the BEETDROP_PASSWORD environment variable arrives
     as plaintext and cannot be pre-hashed)."""
     if not stored:
         return False

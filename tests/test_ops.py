@@ -6,14 +6,14 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-import trackpull.app as app_module
-import trackpull.jobs as jobs_module
-from trackpull.app import create_app
-from trackpull.config import Config, InboxError, check_inbox, inbox_problem
-from trackpull.db import Store
-from trackpull.download import LogCollector
-from trackpull.grab import GrabOutcome
-from trackpull.search import Result
+import beetdrop.app as app_module
+import beetdrop.jobs as jobs_module
+from beetdrop.app import create_app
+from beetdrop.config import Config, InboxError, check_inbox, inbox_problem
+from beetdrop.db import Store
+from beetdrop.download import LogCollector
+from beetdrop.grab import GrabOutcome
+from beetdrop.search import Result
 
 
 def make_config(tmp_path, **overrides):

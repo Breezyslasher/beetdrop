@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from trackpull.handoff import deliver, same_filesystem
-from trackpull.seedtags import SeedTags, seed_from_result, verify_audio
-from trackpull.search import Result
+from beetdrop.handoff import deliver, same_filesystem
+from beetdrop.seedtags import SeedTags, seed_from_result, verify_audio
+from beetdrop.search import Result
 
 
 def make_result(**overrides):

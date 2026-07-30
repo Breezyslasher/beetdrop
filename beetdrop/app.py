@@ -12,7 +12,7 @@ Endpoints:
     GET  /events                      SSE stream of job state changes
 
 Auth is an optional single shared password, LAN-tool grade: when set,
-requests carry it in an X-Trackpull-Password header or a password query
+requests carry it in an X-Beetdrop-Password header or a password query
 parameter (EventSource cannot set headers). /api/health stays open so
 container healthchecks work.
 """
@@ -72,7 +72,7 @@ class LoginRequest(BaseModel):
     password: str
 
 
-SESSION_COOKIE = "trackpull_session"
+SESSION_COOKIE = "beetdrop_session"
 
 
 def create_app(base_config: Optional[Config] = None) -> FastAPI:
@@ -129,7 +129,7 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
         manager.shutdown()
         store.close()
 
-    app = FastAPI(title="trackpull", version=__version__, lifespan=lifespan)
+    app = FastAPI(title="beetdrop", version=__version__, lifespan=lifespan)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -158,7 +158,9 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
         # Header auth for scripts and curl. Failed attempts count toward
         # the same throttle as login attempts. The password is never
         # accepted in a query string - query strings end up in logs.
-        header = request.headers.get("x-trackpull-password", "")
+        # The pre-rename header name is still accepted.
+        header = (request.headers.get("x-beetdrop-password", "")
+                  or request.headers.get("x-trackpull-password", ""))
         if header:
             key = client_key(request)
             if throttle.retry_after(key):

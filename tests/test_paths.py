@@ -1,6 +1,6 @@
 """Path sanitisation and inbox folder naming."""
 
-from trackpull.paths import (
+from beetdrop.paths import (
     FALLBACK_SEGMENT,
     grab_folder_name,
     sanitize_segment,

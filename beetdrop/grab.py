@@ -1,7 +1,7 @@
 """One grab, end to end: download, seed-tag, verify, atomic inbox handoff.
 
 The success outcome is "handed off to the inbox", not "imported" —
-whether and how the file imports is beets' decision, and Trackpull does
+whether and how the file imports is beets' decision, and Beetdrop does
 not know.
 
 Stage and progress callbacks exist so the web layer's job queue can
@@ -247,7 +247,7 @@ def run_album_grab(
                 target = patch_into / produced.name
                 if target.exists():
                     continue
-                temp = patch_into / (".%s.trackpull-tmp" % produced.name)
+                temp = patch_into / (".%s.beetdrop-tmp" % produced.name)
                 try:
                     shutil.copyfile(produced, temp)
                     os.replace(temp, target)

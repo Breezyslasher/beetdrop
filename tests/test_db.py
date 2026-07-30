@@ -1,6 +1,6 @@
 """Job and settings store."""
 
-from trackpull.db import Store
+from beetdrop.db import Store
 
 
 def make_store(tmp_path):

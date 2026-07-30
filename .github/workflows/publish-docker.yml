@@ -1,4 +1,4 @@
-name: Build and publish Trackpull image
+name: Build and publish Beetdrop image
 
 # push paths are deliberately unfiltered: combining a paths filter with
 # tag triggers silently skips tag builds, and nearly every commit here
@@ -11,13 +11,13 @@ on:
     paths:
       - 'Dockerfile'
       - 'docker/**'
-      - 'trackpull/**'
+      - 'beetdrop/**'
       - 'requirements.txt'
       - '.github/workflows/publish-docker.yml'
   workflow_dispatch:
 
 env:
-  IMAGE: ghcr.io/${{ github.repository_owner }}/trackpull
+  IMAGE: ghcr.io/${{ github.repository_owner }}/beetdrop
 
 jobs:
   test:
@@ -49,7 +49,7 @@ jobs:
       - name: Read app version
         id: version
         run: |
-          VERSION=$(sed -n 's/^__version__ = "\([^"]*\)".*/\1/p' trackpull/__init__.py | head -1)
+          VERSION=$(sed -n 's/^__version__ = "\([^"]*\)".*/\1/p' beetdrop/__init__.py | head -1)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "App version: $VERSION"
 
@@ -78,7 +78,7 @@ jobs:
             type=semver,pattern={{version}}
             type=sha
           labels: |
-            org.opencontainers.image.title=Trackpull
+            org.opencontainers.image.title=Beetdrop
             org.opencontainers.image.description=Search YouTube Music and drop seed-tagged audio into a beets-flask inbox
 
       - name: Build amd64 image for smoke test
@@ -87,17 +87,17 @@ jobs:
           context: .
           platforms: linux/amd64
           load: true
-          tags: trackpull:smoke
+          tags: beetdrop:smoke
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Smoke test the image
         run: |
           mkdir -p "$RUNNER_TEMP/inbox"
-          docker run -d --name trackpull-smoke -p 8090:8090 \
+          docker run -d --name beetdrop-smoke -p 8090:8090 \
             -v "$RUNNER_TEMP/inbox:/inbox" \
             -e PUID=$(id -u) -e PGID=$(id -g) \
-            trackpull:smoke
+            beetdrop:smoke
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8090/api/health > health.json 2>/dev/null; then
               break
@@ -105,9 +105,9 @@ jobs:
             sleep 1
           done
           cat health.json
-          grep -q '"status": *"ok"' health.json || { docker logs trackpull-smoke; exit 1; }
-          grep -q '"inbox_writable": *true' health.json || { docker logs trackpull-smoke; exit 1; }
-          docker rm -f trackpull-smoke
+          grep -q '"status": *"ok"' health.json || { docker logs beetdrop-smoke; exit 1; }
+          grep -q '"inbox_writable": *true' health.json || { docker logs beetdrop-smoke; exit 1; }
+          docker rm -f beetdrop-smoke
 
       - name: Build and push multi-arch
         if: github.event_name != 'pull_request'

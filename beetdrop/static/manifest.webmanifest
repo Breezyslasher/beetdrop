@@ -1,6 +1,6 @@
 {
-  "name": "Trackpull",
-  "short_name": "Trackpull",
+  "name": "Beetdrop",
+  "short_name": "Beetdrop",
   "description": "Search YouTube Music and drop seed-tagged audio into a beets inbox",
   "start_url": "/",
   "scope": "/",

@@ -7,12 +7,12 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-import trackpull.jobs as jobs_module
-from trackpull.app import create_app
-from trackpull.config import Config
-from trackpull.db import Store
-from trackpull.grab import GrabOutcome
-from trackpull.search import Result
+import beetdrop.jobs as jobs_module
+from beetdrop.app import create_app
+from beetdrop.config import Config
+from beetdrop.db import Store
+from beetdrop.grab import GrabOutcome
+from beetdrop.search import Result
 
 
 def make_config(tmp_path, **overrides):
@@ -191,7 +191,7 @@ class TestTrackDelay:
         assert Config(track_delay="garbage").track_delay_range() == (2.0, 5.0)
 
     def test_sleep_called_between_album_tracks(self, tmp_path, monkeypatch):
-        import trackpull.grab as grab_module
+        import beetdrop.grab as grab_module
         from tests.test_album import make_lookup
 
         config = make_config(tmp_path, track_delay="1-1")

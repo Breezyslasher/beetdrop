@@ -5,8 +5,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from trackpull.app import create_app
-from trackpull.config import Config
+from beetdrop.app import create_app
+from beetdrop.config import Config
 
 
 @pytest.fixture
@@ -27,7 +27,7 @@ class TestShell:
         response = client.get("/")
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
-        assert "Trackpull" in response.text
+        assert "Beetdrop" in response.text
         assert "app.js" in response.text
 
     def test_manifest(self, client):

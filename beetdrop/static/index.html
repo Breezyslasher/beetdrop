@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#11151b">
-  <title>Trackpull</title>
+  <title>Beetdrop</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/static/icons/icon-192.png">
   <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
@@ -15,7 +15,7 @@
 <div class="shell" v-cloak :class="layoutClass">
 
   <header class="topbar">
-    <span class="brand">Trackpull</span>
+    <span class="brand">Beetdrop</span>
     <span class="health" :class="healthClass" :title="healthTitle"></span>
     <button class="iconbtn" type="button" aria-label="Settings" @click="openSettings">
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
@@ -195,7 +195,7 @@
       </label>
 
       <p class="note" v-if="settings">
-        yt-dlp {{ settings.ytdlp_version }} &middot; Trackpull server
+        yt-dlp {{ settings.ytdlp_version }} &middot; Beetdrop server
         {{ health ? health.version : '' }}
         <template v-if="health"> &middot; {{ health.failures_last_hour }} failed in the last hour
           &middot; {{ health.inbox_free_mb }} MB free</template>
