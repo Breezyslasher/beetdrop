@@ -1,0 +1,5 @@
+# yt-dlp is deliberately unpinned: it ages against YouTube changes on a
+# scale of weeks, unlike everything else here.
+yt-dlp
+ytmusicapi>=1.5
+mutagen>=1.47
