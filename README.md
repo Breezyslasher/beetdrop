@@ -207,9 +207,12 @@ tunnel or reverse proxy's job.
   a confusing error after the download already happened.
 - /api/health reports failures_last_hour; a wave of failures usually
   means YouTube changed something and yt-dlp needs updating. Settings
-  has an "Update yt-dlp" button (POST /api/ytdlp/update); the new
-  version loads on the next container restart, and the response says
-  so rather than pretending.
+  has an "Update yt-dlp" button (POST /api/ytdlp/update): the update
+  installs into /config/yt-dlp (the server runs unprivileged and
+  cannot touch the system copy) and is hot-swapped into the running
+  process - active for the very next grab, no restart, and it
+  persists across restarts. A rebuilt image that bundles a newer
+  yt-dlp than the persisted copy takes precedence automatically.
 - Failed jobs keep the last lines of yt-dlp output, shown as an
   expandable log in the queue.
 - The format picker next to the search field overrides the output

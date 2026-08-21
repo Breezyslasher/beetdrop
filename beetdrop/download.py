@@ -95,10 +95,15 @@ def download_audio(
         ydl_opts["logger"] = logger
 
     url = "https://music.youtube.com/watch?v=%s" % video_id
+    # Captured before downloading: a live yt-dlp update can swap the
+    # module mid-download, and the raised exception belongs to the class
+    # from the module that started this download.
+    ydl_class = yt_dlp.YoutubeDL
+    ydl_error = yt_dlp.utils.DownloadError
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with ydl_class(ydl_opts) as ydl:
             ydl.download([url])
-    except yt_dlp.utils.DownloadError as exc:
+    except ydl_error as exc:
         raise DownloadError(str(exc)) from exc
 
     produced = scratch_dir / ("%s.%s" % (video_id, fmt))

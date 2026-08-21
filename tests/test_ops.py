@@ -166,32 +166,25 @@ class TestJobLog:
 
 
 class TestYtdlpUpdate:
-    def test_update_reports_versions(self, tmp_path, monkeypatch):
+    def test_update_applies_live(self, tmp_path, monkeypatch):
         config = make_config(tmp_path)
-
-        def fake_run(cmd, **kwargs):
-            class R:
-                returncode = 0
-                stderr = ""
-            return R()
-
-        monkeypatch.setattr("subprocess.run", fake_run)
-        monkeypatch.setattr("importlib.metadata.version", lambda name: "2099.01.01")
+        monkeypatch.setattr(
+            app_module.updater, "update_and_reload",
+            lambda config_dir: {"old": "2026.07.04", "new": "2099.01.01"},
+        )
         with TestClient(create_app(config)) as client:
             body = client.post("/api/ytdlp/update").json()
         assert body["installed_version"] == "2099.01.01"
-        assert body["restart_needed"] is True
+        assert body["active"] is True
+        assert body["restart_needed"] is False
 
     def test_update_failure_is_502(self, tmp_path, monkeypatch):
         config = make_config(tmp_path)
 
-        def fake_run(cmd, **kwargs):
-            class R:
-                returncode = 1
-                stderr = "no network"
-            return R()
+        def boom(config_dir):
+            raise RuntimeError("no network")
 
-        monkeypatch.setattr("subprocess.run", fake_run)
+        monkeypatch.setattr(app_module.updater, "update_and_reload", boom)
         with TestClient(create_app(config)) as client:
             response = client.post("/api/ytdlp/update")
         assert response.status_code == 502

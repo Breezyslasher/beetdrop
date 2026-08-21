@@ -30,7 +30,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__
+from . import __version__, updater
 from .auth import (
     LoginThrottle,
     check_session_token,
@@ -106,6 +106,12 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
 
     secret = load_or_create_secret(base.config_dir)
     throttle = LoginThrottle()
+    # A yt-dlp updated through the UI persists in /config; load it now
+    # if it is at least as new as the bundled copy.
+    try:
+        updater.activate(base.config_dir)
+    except Exception as exc:
+        print("WARNING: could not activate persisted yt-dlp update: %s" % exc)
     # Worker pool size comes from settings at startup; changing the
     # setting applies on the next restart.
     manager = JobManager(store, broadcaster, effective_config,
@@ -313,32 +319,20 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
 
     @app.post("/api/ytdlp/update", dependencies=[protected])
     async def api_ytdlp_update():
-        """Update the installed yt-dlp package. The running process keeps
-        the already-imported version; a container restart loads the new
-        one, which the response says explicitly rather than pretending."""
-        loaded = ytdlp_version()
-
-        def upgrade():
-            import subprocess
-            import sys
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--no-cache-dir",
-                 "--upgrade", "yt-dlp"],
-                capture_output=True, text=True, timeout=300,
-            )
-            if result.returncode != 0:
-                raise RuntimeError(result.stderr.strip()[-500:] or "pip failed")
-            from importlib.metadata import version
-            return version("yt-dlp")
-
+        """Update yt-dlp into the config volume and hot-swap the loaded
+        module - active immediately, no restart, and it persists across
+        restarts. The server runs unprivileged, so the system copy is
+        not touched."""
         try:
-            installed = await asyncio.to_thread(upgrade)
+            result = await asyncio.to_thread(
+                updater.update_and_reload, base.config_dir)
         except Exception as exc:
             raise HTTPException(status_code=502, detail="update failed: %s" % exc)
         return {
-            "loaded_version": loaded,
-            "installed_version": installed,
-            "restart_needed": installed != loaded,
+            "loaded_version": result["old"],
+            "installed_version": result["new"],
+            "active": True,
+            "restart_needed": False,
         }
 
     @app.get("/events", dependencies=[protected])
