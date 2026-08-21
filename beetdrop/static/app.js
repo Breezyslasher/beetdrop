@@ -297,12 +297,14 @@ createApp({
       this.updatingYtdlp = true;
       try {
         const body = await this.api("/api/ytdlp/update", { method: "POST" });
-        if (body.restart_needed) {
-          this.showToast("yt-dlp " + body.installed_version +
-            " installed; restart the container to load it");
+        if (body.installed_version !== body.loaded_version) {
+          this.showToast("yt-dlp updated to " + body.installed_version +
+            " and active now");
         } else {
           this.showToast("yt-dlp is already up to date (" + body.loaded_version + ")");
         }
+        // The settings panel shows the resolved version; refresh it.
+        this.settings = await this.api("/api/settings");
       } catch (err) {
         if (err.message !== "password required") this.showToast("Update failed: " + err.message);
       } finally {
