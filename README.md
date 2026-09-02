@@ -1,8 +1,10 @@
 # Beetdrop
 
-A mobile-first web app with one job: search for a song, download the audio
-from YouTube Music, and drop it into a beets-flask inbox folder so beets
-can tag and file it.
+A mobile-first web app: search for a song or album, download the audio
+from YouTube Music, and file it into your music library - either by
+handing seed-tagged folders to a beets(-flask) inbox, or fully
+standalone with Beetdrop doing the MusicBrainz matching, tagging, and
+filing itself.
 
 Formerly named Trackpull. The rename is backward compatible: legacy
 `TRACKPULL_*` environment variables and the `X-Trackpull-Password`
@@ -10,13 +12,38 @@ header are still honored, and an existing trackpull.sqlite3 job
 database is migrated in place on first start. Update the image name to
 `ghcr.io/breezyslasher/beetdrop` and log in again (sessions reset).
 
-The line is the inbox. Upstream of it is Beetdrop. Downstream of it is
-beets. Beetdrop does no MusicBrainz lookups, no release disambiguation,
-no cover art, no library path construction and no lyrics — beets already
-does every one of those things better, and beets-flask already provides a
-mobile web UI for confirming its matches.
+In inbox mode the line is the inbox: upstream of it is Beetdrop,
+downstream of it is beets, and beets stays the metadata authority. In
+library mode there is no beets - Beetdrop matches, tags, and files on
+its own.
 
 Current status: CLI, web API, web UI (PWA), and Docker image.
+
+## Filing modes
+
+Settings (or BEETDROP_MODE) picks one of two modes:
+
+- "inbox" (default): the original pipeline. Grabs get minimal seed tags
+  and land as one-folder-per-grab units in a beets(-flask) inbox; beets
+  is the metadata authority downstream.
+- "library" (standalone, no beets): each grab is matched against
+  MusicBrainz - duration-first recording scoring for singles, whole-
+  release matching with tracklist duration verification for albums.
+  Matched audio gets full Picard-compatible tags (artist, album, date,
+  track and disc numbers, MusicBrainz IDs), embedded cover art from the
+  Cover Art Archive (with the YouTube thumbnail as last resort), a
+  cover.jpg in the album folder, and is filed straight into the music
+  library as {albumartist}/{album} (year)/NN - title.ext. Grabs that
+  cannot be verified go under _review/ with YouTube-derived tags and an
+  unverified marker instead of polluting the clean library. Mount the
+  library at /music (MUSIC_PATH) and keep PUID/PGID matched to its
+  owner.
+
+MusicBrainz calls are rate limited to one per second process-wide and
+cached in SQLite for 30 days. Honest caveat versus beets: matching has
+no acoustic fingerprinting, so a wrong-video grab (a cover, a sped-up
+upload) can only be caught by duration and text similarity - watch the
+_review folder and the duration on cards.
 
 ## What a grab does
 

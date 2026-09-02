@@ -1,10 +1,8 @@
-"""Beetdrop: search for a song, download the audio from YouTube Music, and
-drop it into a beets-flask inbox folder so beets can tag and file it.
-
-The line is the inbox. Upstream of it is Beetdrop. Downstream of it is
-beets. No MusicBrainz lookups, no release disambiguation, no cover art, no
-library paths — beets does every one of those things better.
+"""Beetdrop: search for a song or album, download the audio from YouTube
+Music, and file it into a music library - via a beets(-flask) inbox
+(inbox mode), or standalone with Beetdrop doing the MusicBrainz
+matching, tagging, cover art, and filing itself (library mode).
 """
 
-__version__ = "0.9.0"
+__version__ = "0.10.0"
 APP_NAME = "beetdrop"

@@ -90,6 +90,8 @@ class JobManager:
         for job in self._store.list_jobs(200):
             if job["stage"] != "done" or not job["inbox_path"]:
                 continue
+            if job["inbox_state"] in ("filed", "unverified"):
+                continue  # library mode filed it; nothing watches these
             if job["inbox_state"] == "picked_up":
                 continue
             if not Path(job["inbox_path"]).exists():
@@ -186,8 +188,15 @@ class JobManager:
             collector.add(text)
             self._update(job_id, detail=text)
 
+        def audio_state(verified: bool) -> str:
+            # Inbox mode hands to beets and waits; library mode files the
+            # audio itself - "filed" (or "unverified" under _review).
+            if config.mode == "library":
+                return "filed" if verified else "unverified"
+            return "waiting"
+
         try:
-            check_inbox(config.inbox, config.min_free_mb)
+            check_inbox(config.audio_root(), config.min_free_mb)
             if job["kind"] == "album":
                 only_tracks = None
                 patch_into = None
@@ -226,7 +235,7 @@ class JobManager:
                              detail=detail[:2000], log=collector.text()[:20000],
                              failed_tracks=json.dumps(outcome.failed) if outcome.failed else "",
                              inbox_path=str(outcome.inbox_path),
-                             inbox_state="waiting")
+                             inbox_state=audio_state(outcome.verified))
             else:
                 outcome = run_grab(
                     job["video_id"], config,
@@ -239,7 +248,7 @@ class JobManager:
                 self._update(job_id, stage="done", progress=100.0,
                              log=collector.text()[:20000],
                              inbox_path=str(outcome.inbox_path),
-                             inbox_state="waiting")
+                             inbox_state=audio_state(outcome.verified))
         except JobCancelled:
             collector.add("cancelled by user")
             self._update(job_id, stage="cancelled", error="cancelled by user",

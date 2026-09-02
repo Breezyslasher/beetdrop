@@ -50,6 +50,15 @@ class Config:
     # Job history retention: terminal jobs beyond both limits are pruned.
     keep_jobs: int = field(default_factory=lambda: int(_env("KEEP_JOBS", "200")))
     keep_days: int = field(default_factory=lambda: int(_env("KEEP_DAYS", "30")))
+    # "inbox": hand seed-tagged folders to a beets(-flask) inbox.
+    # "library": Beetdrop matches against MusicBrainz itself, writes full
+    # tags plus cover art, and files straight into music_root.
+    mode: str = field(default_factory=lambda: _env("MODE", "inbox"))
+    music_root: Path = field(default_factory=lambda: Path(os.environ.get("MUSIC_PATH", "/music")))
+
+    def audio_root(self) -> Path:
+        """Where finished audio goes in the active mode."""
+        return self.music_root if self.mode == "library" else self.inbox
 
     def track_delay_range(self) -> tuple:
         try:
