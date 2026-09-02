@@ -23,10 +23,11 @@ COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh \
     && groupadd -g 1000 beetdrop \
     && useradd -u 1000 -g beetdrop -m beetdrop \
-    && mkdir -p /config /inbox
+    && mkdir -p /config /inbox /music
 
 ENV BEETDROP_CONFIG=/config \
     INBOX_PATH=/inbox \
+    MUSIC_PATH=/music \
     PYTHONUNBUFFERED=1
 
 EXPOSE 8090

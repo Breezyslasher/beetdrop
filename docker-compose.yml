@@ -25,6 +25,10 @@ services:
       # beets-flask inbox - point this at the SAME host folder beets-flask
       # watches, e.g. /srv/dev-disk-by-uuid-XXXX/Media/inbox
       - ./inbox:/inbox
+      # Library mode: mount your music library and set the filing mode to
+      # "library" in Settings - Beetdrop then tags via MusicBrainz and
+      # files straight here, no beets needed.
+      # - /srv/dev-disk-by-uuid-XXXX/Media/Music/explo:/music
       # Optional: cookies for throttled or region-locked content
       # - ./config/cookies.txt:/config/cookies.txt:ro
 

@@ -232,6 +232,8 @@ createApp({
       try {
         this.settings = await this.api("/api/settings");
         this.draft = {
+          mode: this.settings.mode,
+          music_root: this.settings.music_root,
           output_format: this.settings.output_format,
           bitrate: this.settings.bitrate,
           inbox: this.settings.inbox,
@@ -248,6 +250,8 @@ createApp({
 
     async saveSettings() {
       const update = {
+        mode: this.draft.mode,
+        music_root: this.draft.music_root,
         output_format: this.draft.output_format,
         bitrate: this.draft.bitrate,
         inbox: this.draft.inbox,

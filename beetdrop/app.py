@@ -66,6 +66,8 @@ class SettingsUpdate(BaseModel):
     password: Optional[str] = None
     concurrency: Optional[int] = None
     cookies: Optional[str] = None  # cookies.txt content; "" clears
+    mode: Optional[str] = None  # "inbox" (beets) or "library" (standalone)
+    music_root: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -99,6 +101,10 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
                 config.concurrency = int(stored["concurrency"])
             except ValueError:
                 pass
+        if stored.get("mode") in ("inbox", "library"):
+            config.mode = stored["mode"]
+        if stored.get("music_root"):
+            config.music_root = Path(stored["music_root"])
         # Cookies uploaded through Settings win over the mounted file.
         if uploaded_cookies.is_file() and uploaded_cookies.stat().st_size > 0:
             config.cookies_file = str(uploaded_cookies)
@@ -126,7 +132,7 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         manager.start()
-        problem = inbox_problem(effective_config().inbox)
+        problem = inbox_problem(effective_config().audio_root())
         if problem:
             # Loud at startup, and again in /api/health; the process still
             # serves so the problem is visible over HTTP, not just in logs.
@@ -272,6 +278,8 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             "concurrency": config.concurrency,
             "workers_active": True,  # concurrency changes apply on restart
             "cookies_set": bool(config.cookies_file),
+            "mode": config.mode,
+            "music_root": str(config.music_root),
             "ytdlp_version": ytdlp_version(),  # read-only
         }
 
@@ -281,6 +289,8 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             raise HTTPException(status_code=422, detail="format must be one of %s" % (SUPPORTED_FORMATS,))
         if body.concurrency is not None and not (1 <= body.concurrency <= 4):
             raise HTTPException(status_code=422, detail="concurrency must be 1-4")
+        if body.mode is not None and body.mode not in ("inbox", "library"):
+            raise HTTPException(status_code=422, detail="mode must be inbox or library")
         if body.cookies is not None:
             # Stored as a file because yt-dlp wants a cookiefile path;
             # kept out of the DB and readable only by the app user.
@@ -302,10 +312,11 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
     @app.get("/api/health")
     async def api_health():
         config = effective_config()
-        problem = inbox_problem(config.inbox, config.min_free_mb)
+        problem = inbox_problem(config.audio_root(), config.min_free_mb)
         return {
             "status": "ok" if not problem else "degraded",
-            "inbox": str(config.inbox),
+            "mode": config.mode,
+            "inbox": str(config.audio_root()),
             "inbox_writable": not problem,
             "inbox_problem": problem,
             "inbox_free_mb": inbox_free_mb(config.inbox),

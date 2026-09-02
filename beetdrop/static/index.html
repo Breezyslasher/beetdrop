@@ -128,6 +128,12 @@
       <p v-else-if="j.stage === 'done' && j.inbox_state === 'review'" class="handoff-review">
         Not auto-imported - review it in beets-flask
       </p>
+      <p v-else-if="j.stage === 'done' && j.inbox_state === 'filed'" class="handoff">
+        Filed to library
+      </p>
+      <p v-else-if="j.stage === 'done' && j.inbox_state === 'unverified'" class="handoff-review">
+        No MusicBrainz match - filed to _review
+      </p>
       <p v-else-if="j.stage === 'done'" class="handoff">
         Handed off to inbox - waiting for beets
       </p>
@@ -144,6 +150,23 @@
           <option value="mobile">Mobile</option>
           <option value="desktop">Desktop</option>
         </select>
+      </label>
+
+      <label>Filing mode
+        <select v-model="draft.mode">
+          <option value="inbox">Inbox - hand off to beets / beets-flask</option>
+          <option value="library">Library - Beetdrop tags and files itself</option>
+        </select>
+      </label>
+      <p class="note">
+        Library mode matches each grab against MusicBrainz, writes full
+        tags and cover art, and files straight into the music library.
+        Grabs it cannot verify go to the _review folder instead of the
+        clean library.
+      </p>
+
+      <label v-if="draft.mode === 'library'">Music library path
+        <input v-model="draft.music_root" type="text" spellcheck="false">
       </label>
 
       <label>Output format
@@ -163,7 +186,7 @@
         <input v-model="draft.bitrate" type="text" inputmode="numeric" placeholder="192">
       </label>
 
-      <label>Inbox path
+      <label v-if="draft.mode !== 'library'">Inbox path
         <input v-model="draft.inbox" type="text" spellcheck="false">
       </label>
       <p class="note" v-if="health">
