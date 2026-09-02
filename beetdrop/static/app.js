@@ -244,11 +244,14 @@ createApp({
 
     async saveSettings() {
       const update = {
-        music_root: this.draft.music_root,
         output_format: this.draft.output_format,
         bitrate: this.draft.bitrate,
         concurrency: Number(this.draft.concurrency) || undefined,
       };
+      // Only send the library path when it is editable (not env-locked).
+      if (this.settings && !this.settings.music_root_locked) {
+        update.music_root = this.draft.music_root;
+      }
       if (this.draft.new_password) update.password = this.draft.new_password;
       if (this.draft.cookies && this.draft.cookies.trim()) update.cookies = this.draft.cookies;
       try {

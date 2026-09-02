@@ -70,6 +70,37 @@ class TestLibrarySettings:
         assert health["status"] == "degraded"
         assert "missing-library" in health["library_problem"]
 
+    def test_music_root_locked_by_env(self, tmp_path, monkeypatch):
+        # MUSIC_PATH in the environment (the Docker case) locks the path:
+        # it is reported locked, PUT rejects changes, and the env value
+        # wins over any stored override.
+        env_music = tmp_path / "env-music"
+        env_music.mkdir()
+        monkeypatch.setenv("MUSIC_PATH", str(env_music))
+        config = make_config(tmp_path)  # config_dir etc, music_root ignored below
+        config.music_root = env_music
+        with TestClient(create_app(config)) as client:
+            settings = client.get("/api/settings").json()
+            assert settings["music_root_locked"] is True
+            assert settings["music_root"] == str(env_music)
+            # A change attempt is refused.
+            resp = client.put("/api/settings", json={"music_root": "/somewhere/else"})
+            assert resp.status_code == 422
+            # And even a stored value (from a pre-lock era) is ignored.
+            from beetdrop.db import Store
+            Store(config.db_path).set_settings({"music_root": "/stale/path"})
+            assert client.get("/api/health").json()["library"] == str(env_music)
+
+    def test_music_root_editable_without_env(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("MUSIC_PATH", raising=False)
+        config = make_config(tmp_path)
+        other = tmp_path / "other"
+        other.mkdir()
+        with TestClient(create_app(config)) as client:
+            assert client.get("/api/settings").json()["music_root_locked"] is False
+            assert client.put("/api/settings",
+                              json={"music_root": str(other)}).status_code == 200
+
 
 class TestFilingStates:
     def test_verified_grab_marks_filed(self, tmp_path, monkeypatch):
