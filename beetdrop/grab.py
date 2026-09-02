@@ -30,7 +30,9 @@ from .library import (
     resolve_track,
     track_filename,
     write_cover_file,
+    write_lyrics_sidecar,
 )
+from .lyrics import fetch_synced_lyrics
 from .mb import MusicBrainzClient
 from .search import AlbumLookup, Result, lookup_album, lookup_video
 
@@ -66,9 +68,25 @@ def get_mb_client(config: Config) -> MusicBrainzClient:
         return client
 
 
+def _maybe_write_lyrics(config: Config, final_path: Path, tags: FullTags,
+                        duration_seconds) -> None:
+    """Fetch synced lyrics and drop a .lrc sidecar. Best effort - a
+    failure or absent lyrics never affects the grab."""
+    if not config.lyrics_enabled:
+        return
+    try:
+        lrc = fetch_synced_lyrics(tags.artist, tags.title, tags.album,
+                                  duration_seconds)
+        if lrc:
+            write_lyrics_sidecar(final_path, lrc)
+    except Exception:
+        pass
+
+
 def _finish_into_library(config: Config, audio_path: Path, tags: FullTags,
-                         cover) -> Path:
-    """Tag fully and file one track into the music library (or _review)."""
+                         cover, duration_seconds=None) -> Path:
+    """Tag fully and file one track into the music library (or _review),
+    with a synced-lyrics sidecar when available."""
     cover_bytes, cover_mime = (cover[0], cover[1]) if cover else (None, "image/jpeg")
     write_full_tags(audio_path, tags, cover_bytes, cover_mime)
     directory = album_dir(config.music_root, tags)
@@ -76,6 +94,7 @@ def _finish_into_library(config: Config, audio_path: Path, tags: FullTags,
         tags, audio_path.suffix.lstrip(".")))
     if cover_bytes and not tags.unverified:
         write_cover_file(directory, cover_bytes, cover_mime)
+    _maybe_write_lyrics(config, final, tags, duration_seconds)
     return final
 
 
@@ -135,7 +154,8 @@ def run_grab(
 
         on_stage("tagging")
         on_stage("moving")
-        final = _finish_into_library(config, audio_path, tags, cover)
+        final = _finish_into_library(config, audio_path, tags, cover,
+                                     result.duration_seconds)
         return GrabOutcome(inbox_path=final, result=result,
                            verified=resolution.matched)
     finally:
@@ -284,10 +304,11 @@ def run_album_grab(
                 cover_bytes, cover_mime = ((cover[0], cover[1]) if cover
                                            else (None, "image/jpeg"))
                 write_full_tags(audio_path, tags, cover_bytes, cover_mime)
-                place_file(
+                final = place_file(
                     audio_path,
                     library_dir / track_filename(tags,
                                                  audio_path.suffix.lstrip(".")))
+                _maybe_write_lyrics(config, final, tags, track.duration_seconds)
                 delivered += 1
             except Exception as exc:
                 failed.append({"n": track.track_number, "title": track.title,

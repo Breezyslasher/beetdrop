@@ -98,7 +98,7 @@ def config(tmp_path):
                   config_dir=tmp_path / "config", track_delay="0")
 
 
-def install_fakes(monkeypatch, mb, fmt="opus"):
+def install_fakes(monkeypatch, mb, fmt="opus", lrc=None):
     def fake_download(video_id, scratch_dir, fmt=fmt, bitrate="192", **kwargs):
         path = Path(scratch_dir) / ("%s.%s" % (video_id, fmt))
         make_audio(path, fmt)
@@ -106,6 +106,9 @@ def install_fakes(monkeypatch, mb, fmt="opus"):
 
     monkeypatch.setattr(grab_module, "download_audio", fake_download)
     monkeypatch.setattr(grab_module, "get_mb_client", lambda c: mb)
+    # Lyrics fetch faked at the network boundary; None unless a test opts in.
+    monkeypatch.setattr(grab_module, "fetch_synced_lyrics",
+                        lambda artist, title, album="", duration_seconds=None: lrc)
 
 
 class TestSingleGrabIntegration:
@@ -116,7 +119,7 @@ class TestSingleGrabIntegration:
             release=full_release_payload(["Other", "Real Song"]),
             cover=(b"\xff\xd8jpgdata", "image/jpeg", "caa-release"),
         )
-        install_fakes(monkeypatch, mb)
+        install_fakes(monkeypatch, mb, lrc="[00:01.00]Real Song lyric")
         monkeypatch.setattr(grab_module, "lookup_video",
                             lambda v: Result(video_id=v, title="Real Song (Official Video)",
                                              raw_title="Real Song (Official Video)",
@@ -137,6 +140,9 @@ class TestSingleGrabIntegration:
         assert tags["tracknumber"] == ["2"]
         raw = mutagen.File(str(expected))
         assert "rec-2" in str(raw.tags.get("MUSICBRAINZ_TRACKID"))
+        # Synced lyrics sidecar landed next to the audio, same basename.
+        lrc = expected.with_suffix(".lrc")
+        assert lrc.read_text() == "[00:01.00]Real Song lyric"
 
     def test_unmatched_single_goes_to_review(self, config, monkeypatch):
         mb = FakeMB(recordings=[], cover=None)

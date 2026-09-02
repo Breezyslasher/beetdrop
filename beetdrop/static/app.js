@@ -232,6 +232,7 @@ createApp({
           output_format: this.settings.output_format,
           bitrate: this.settings.bitrate,
           concurrency: this.settings.concurrency,
+          lyrics: this.settings.lyrics,
           cookies: "",
           new_password: "",
         };
@@ -247,6 +248,7 @@ createApp({
         output_format: this.draft.output_format,
         bitrate: this.draft.bitrate,
         concurrency: Number(this.draft.concurrency) || undefined,
+        lyrics: !!this.draft.lyrics,
       };
       // Only send the library path when it is editable (not env-locked).
       if (this.settings && !this.settings.music_root_locked) {
