@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 import beetdrop.app as app_module
 import beetdrop.jobs as jobs_module
 from beetdrop.app import create_app
-from beetdrop.config import Config, InboxError, check_inbox, inbox_problem
+from beetdrop.config import Config, StorageError, check_storage, storage_problem
 from beetdrop.db import Store
 from beetdrop.download import LogCollector
 from beetdrop.grab import GrabOutcome
@@ -19,7 +19,7 @@ from beetdrop.search import Result
 def make_config(tmp_path, **overrides):
     inbox = tmp_path / "inbox"
     inbox.mkdir(exist_ok=True)
-    defaults = dict(inbox=inbox, scratch_root=tmp_path / "scratch",
+    defaults = dict(music_root=inbox, scratch_root=tmp_path / "scratch",
                     config_dir=tmp_path / "config", min_free_mb=0)
     defaults.update(overrides)
     return Config(**defaults)
@@ -35,7 +35,7 @@ def fake_run_grab_factory(ran):
             logger.add("[download] pretending to fetch %s" % video_id)
         if video_id == "boom":
             raise ValueError("simulated failure")
-        destination = cfg.inbox / "Artist - Title"
+        destination = cfg.music_root / "Artist - Title"
         destination.mkdir(parents=True, exist_ok=True)
         return GrabOutcome(
             inbox_path=destination,
@@ -84,15 +84,15 @@ class TestDiskSpace:
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         # An absurd minimum no filesystem satisfies.
-        problem = inbox_problem(inbox, min_free_mb=10**9)
+        problem = storage_problem(inbox, min_free_mb=10**9)
         assert "below the" in problem
-        with pytest.raises(InboxError):
-            check_inbox(inbox, min_free_mb=10**9)
+        with pytest.raises(StorageError):
+            check_storage(inbox, min_free_mb=10**9)
 
     def test_ample_space_is_fine(self, tmp_path):
         inbox = tmp_path / "inbox"
         inbox.mkdir()
-        assert inbox_problem(inbox, min_free_mb=1) == ""
+        assert storage_problem(inbox, min_free_mb=1) == ""
 
     def test_health_degrades_and_grab_fails(self, tmp_path, monkeypatch):
         config = make_config(tmp_path, min_free_mb=10**9)
@@ -102,7 +102,7 @@ class TestDiskSpace:
             health = client.get("/api/health").json()
             assert health["status"] == "degraded"
             assert health["min_free_mb"] == 10**9
-            assert health["inbox_free_mb"] >= 0
+            assert health["library_free_mb"] >= 0
             job = client.post("/api/grab", json={"video_id": "v"}).json()
             finished = wait_for(client, job["id"])
             assert finished["stage"] == "failed"

@@ -22,7 +22,7 @@ from beetdrop.db import Store
 def make_config(tmp_path, **overrides):
     inbox = tmp_path / "inbox"
     inbox.mkdir(exist_ok=True)
-    defaults = dict(inbox=inbox, scratch_root=tmp_path / "scratch",
+    defaults = dict(music_root=inbox, scratch_root=tmp_path / "scratch",
                     config_dir=tmp_path / "config", min_free_mb=0)
     defaults.update(overrides)
     return Config(**defaults)

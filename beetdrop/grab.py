@@ -1,8 +1,9 @@
-"""One grab, end to end: download, seed-tag, verify, atomic inbox handoff.
+"""One grab, end to end: download, match against MusicBrainz, write full
+tags and cover art, and file straight into the music library.
 
-The success outcome is "handed off to the inbox", not "imported" —
-whether and how the file imports is beets' decision, and Beetdrop does
-not know.
+Grabs that cannot be verified are filed under _review/ with
+YouTube-derived tags and an unverified marker - the clean library never
+gets polluted silently.
 
 Stage and progress callbacks exist so the web layer's job queue can
 mirror the pipeline; the CLI passes simple printers.
@@ -10,22 +11,18 @@ mirror the pipeline; the CLI passes simple printers.
 
 from __future__ import annotations
 
-import os
 import random
 import shutil
+import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Optional
 
-import threading
-from dataclasses import replace
-
 from .config import Config
 from .download import DownloadError, download_audio
-from .fulltags import FullTags, write_full_tags
-from .handoff import deliver, same_filesystem
+from .fulltags import FullTags, verify_audio, write_full_tags
 from .library import (
     album_dir,
     place_file,
@@ -35,20 +32,18 @@ from .library import (
     write_cover_file,
 )
 from .mb import MusicBrainzClient
-from .paths import grab_folder_name, sanitize_segment
 from .search import AlbumLookup, Result, lookup_album, lookup_video
-from .seedtags import SeedTags, seed_from_result, verify_audio, write_seed_tags
 
 # Stage labels, in pipeline order. "queued", "done" and "failed" are owned
-# by the job layer. "matching" only occurs in library mode.
+# by the job layer.
 STAGES = ("searching", "downloading", "extracting", "matching", "tagging", "moving")
 
 
 @dataclass
 class GrabOutcome:
-    inbox_path: Path
+    inbox_path: Path  # final library path (column name kept for history)
     result: Result
-    verified: bool = True  # library mode: False means filed under _review
+    verified: bool = True  # False means filed under _review
 
 
 def _noop(*args) -> None:
@@ -100,7 +95,6 @@ def run_grab(
     job_id = uuid.uuid4().hex[:12]
     scratch = config.scratch_root / job_id
     config.scratch_root.mkdir(parents=True, exist_ok=True)
-    cross_fs = not same_filesystem(config.scratch_root, config.inbox)
 
     on_stage("searching")
     result = lookup_video(video_id)
@@ -127,54 +121,37 @@ def run_grab(
             postprocessor_hook=postprocessor_hook,
             logger=logger,
         )
-
         verify_audio(audio_path)
 
-        if config.mode == "library":
-            on_stage("matching")
-            mb = get_mb_client(config)
-            resolution = resolve_track(
-                mb, result.title, result.primary_artist, result.duration_seconds)
-            tags = resolution.tags
-            cover = mb.fetch_cover(
-                release_mbid=tags.release_mbid,
-                release_group_mbid=tags.release_group_mbid,
-                thumbnail_url=result.thumbnail_url)
-            on_stage("tagging")
-            on_stage("moving")
-            final = _finish_into_library(config, audio_path, tags, cover)
-            return GrabOutcome(inbox_path=final, result=result,
-                               verified=resolution.matched)
+        on_stage("matching")
+        mb = get_mb_client(config)
+        resolution = resolve_track(
+            mb, result.title, result.primary_artist, result.duration_seconds)
+        tags = resolution.tags
+        cover = mb.fetch_cover(
+            release_mbid=tags.release_mbid,
+            release_group_mbid=tags.release_group_mbid,
+            thumbnail_url=result.thumbnail_url)
 
         on_stage("tagging")
-        seed = seed_from_result(result)
-        write_seed_tags(audio_path, seed)
-
         on_stage("moving")
-        folder_name = grab_folder_name(seed.albumartist, seed.title)
-        # Stage the final one-grab-one-folder unit inside scratch, then
-        # hand the whole directory off in a single rename.
-        staged = scratch / "staged" / folder_name
-        staged.mkdir(parents=True)
-        final_audio = staged / ("%s.%s" % (folder_name, audio_path.suffix.lstrip(".")))
-        audio_path.rename(final_audio)
-        destination = deliver(staged, config.inbox, folder_name, cross_fs)
+        final = _finish_into_library(config, audio_path, tags, cover)
+        return GrabOutcome(inbox_path=final, result=result,
+                           verified=resolution.matched)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
-
-    return GrabOutcome(inbox_path=destination, result=result)
 
 
 @dataclass
 class AlbumGrabOutcome:
-    inbox_path: Path
+    inbox_path: Path  # the album directory in the library
     album_title: str
     album_artist: str
     delivered: int
     # {"n": track_number, "title", "reason"} per track that could not be
     # grabbed - structured so a later retry can target exactly these.
     failed: list[dict]
-    verified: bool = True  # library mode: False means filed under _review
+    verified: bool = True  # False means filed under _review
 
 
 def failures_text(failed: list[dict]) -> str:
@@ -192,21 +169,17 @@ def run_album_grab(
     on_detail: Callable[[str], None] = _noop,
     logger=None,
     only_tracks: Optional[set] = None,
-    patch_into: Optional[Path] = None,
 ) -> AlbumGrabOutcome:
-    """Grab a whole album: every playable track downloaded, seed-tagged
-    with its track number, and delivered as ONE album folder in a single
-    atomic rename - a complete album folder is beets' best import unit.
+    """Grab a whole album: matched as one MusicBrainz release, every
+    playable track downloaded, fully tagged with its track number, and
+    filed into one album folder with cover art.
 
     Individual track failures do not abort the album; they are collected
     and reported. Only an album with zero successful tracks fails.
 
-    Retry mode: only_tracks limits the run to those track numbers, and
-    patch_into slots the recovered files into an existing inbox folder
-    (file-by-file, temp-then-replace, never overwriting) when it still
-    exists - so a transient failure gets patched into the album before
-    beets imports it. In this mode zero recoveries is a result, not an
-    error: the album itself was already delivered.
+    Retry mode: only_tracks limits the run to those track numbers;
+    recovered files join the existing album folder (collisions are never
+    overwritten). Zero recoveries is then a result, not an error.
     """
     fmt = fmt or config.output_format
     bitrate = bitrate or config.bitrate
@@ -214,7 +187,6 @@ def run_album_grab(
     job_id = uuid.uuid4().hex[:12]
     scratch = config.scratch_root / job_id
     config.scratch_root.mkdir(parents=True, exist_ok=True)
-    cross_fs = not same_filesystem(config.scratch_root, config.inbox)
 
     on_stage("searching")
     lookup: AlbumLookup = lookup_album(browse_id)
@@ -229,7 +201,6 @@ def run_album_grab(
     if not tracks and only_tracks is None:
         raise DownloadError("album has no playable tracks")
 
-    folder_name = grab_folder_name(album_artist, lookup.album.title)
     failed = [
         {"n": u.get("n"), "title": u.get("title", "?"),
          "reason": "not available on YouTube Music"}
@@ -238,44 +209,37 @@ def run_album_grab(
     total = len(tracks)
     delivered = 0
 
-    library = config.mode == "library"
-    resolution = None
-    cover = None
-    album_level = None
-    if library:
-        on_stage("matching")
-        mb = get_mb_client(config)
-        try:
-            resolution = resolve_album(mb, lookup.album.title, album_artist,
-                                       lookup.tracks)
-        except Exception:
-            resolution = None  # MB down: file unverified rather than fail
-        if resolution is not None:
-            release = resolution.release
-            album_level = FullTags(
-                artist=album_artist,
-                title=lookup.album.title,
-                album_artist=next(iter(resolution.track_tags.values())).album_artist
-                if resolution.track_tags else album_artist,
-                album=release.get("title", lookup.album.title),
-                date=release.get("date", "") or lookup.album.year,
-                unverified=False,
-            )
-            cover = mb.fetch_cover(
-                release_mbid=release.get("id", ""),
-                release_group_mbid=(release.get("release-group") or {}).get("id", ""),
-                thumbnail_url=lookup.album.thumbnail_url)
-        else:
-            album_level = FullTags(
-                artist=album_artist, title=lookup.album.title,
-                album_artist=album_artist, album=lookup.album.title,
-                date=lookup.album.year, unverified=True)
-            cover = mb.fetch_cover(thumbnail_url=lookup.album.thumbnail_url)
-        library_dir = album_dir(config.music_root, album_level)
+    on_stage("matching")
+    mb = get_mb_client(config)
+    try:
+        resolution = resolve_album(mb, lookup.album.title, album_artist,
+                                   lookup.tracks)
+    except Exception:
+        resolution = None  # MB down: file unverified rather than fail
+    if resolution is not None:
+        release = resolution.release
+        album_level = FullTags(
+            artist=album_artist,
+            title=lookup.album.title,
+            album_artist=next(iter(resolution.track_tags.values())).album_artist
+            if resolution.track_tags else album_artist,
+            album=release.get("title", lookup.album.title),
+            date=release.get("date", "") or lookup.album.year,
+            unverified=False,
+        )
+        cover = mb.fetch_cover(
+            release_mbid=release.get("id", ""),
+            release_group_mbid=(release.get("release-group") or {}).get("id", ""),
+            thumbnail_url=lookup.album.thumbnail_url)
+    else:
+        album_level = FullTags(
+            artist=album_artist, title=lookup.album.title,
+            album_artist=album_artist, album=lookup.album.title,
+            date=lookup.album.year, unverified=True)
+        cover = mb.fetch_cover(thumbnail_url=lookup.album.thumbnail_url)
+    library_dir = album_dir(config.music_root, album_level)
 
     try:
-        staged = scratch / "staged" / folder_name
-        staged.mkdir(parents=True)
         on_stage("downloading")
         delay_low, delay_high = config.track_delay_range()
         for index, track in enumerate(tracks):
@@ -302,43 +266,28 @@ def run_album_grab(
                     logger=logger,
                 )
                 verify_audio(audio_path)
-                if library:
-                    matched_tags = (resolution.track_tags.get(track.track_number)
-                                    if resolution else None)
-                    if matched_tags is not None:
-                        tags = replace(matched_tags)
-                    else:
-                        tags = FullTags(
-                            title=track.title,
-                            artist=track.artist_display or album_artist,
-                            album_artist=album_level.album_artist,
-                            album=album_level.album,
-                            date=album_level.date,
-                            track_number=track.track_number or (index + 1),
-                            track_total=lookup.album.track_count or 0,
-                            unverified=album_level.unverified,
-                        )
-                    cover_bytes, cover_mime = ((cover[0], cover[1]) if cover
-                                               else (None, "image/jpeg"))
-                    write_full_tags(audio_path, tags, cover_bytes, cover_mime)
-                    place_file(
-                        audio_path,
-                        library_dir / track_filename(tags,
-                                                     audio_path.suffix.lstrip(".")))
+                matched_tags = (resolution.track_tags.get(track.track_number)
+                                if resolution else None)
+                if matched_tags is not None:
+                    tags = replace(matched_tags)
                 else:
-                    write_seed_tags(audio_path, SeedTags(
+                    tags = FullTags(
                         title=track.title,
                         artist=track.artist_display or album_artist,
-                        albumartist=album_artist,
-                        album=lookup.album.title,
-                        tracknumber=track.track_number,  # known here, so written
-                    ))
-                    target = staged / ("%02d - %s%s" % (
-                        track.track_number or (index + 1),
-                        sanitize_segment(track.title),
-                        audio_path.suffix,
-                    ))
-                    audio_path.rename(target)
+                        album_artist=album_level.album_artist,
+                        album=album_level.album,
+                        date=album_level.date,
+                        track_number=track.track_number or (index + 1),
+                        track_total=lookup.album.track_count or 0,
+                        unverified=album_level.unverified,
+                    )
+                cover_bytes, cover_mime = ((cover[0], cover[1]) if cover
+                                           else (None, "image/jpeg"))
+                write_full_tags(audio_path, tags, cover_bytes, cover_mime)
+                place_file(
+                    audio_path,
+                    library_dir / track_filename(tags,
+                                                 audio_path.suffix.lstrip(".")))
                 delivered += 1
             except Exception as exc:
                 failed.append({"n": track.track_number, "title": track.title,
@@ -347,55 +296,30 @@ def run_album_grab(
 
         if delivered == 0:
             if only_tracks is not None:
-                # Retry pass recovered nothing; the album folder that was
-                # already delivered stays exactly as it is.
-                already = (library_dir if library
-                           else (patch_into if patch_into else config.inbox / folder_name))
+                # Retry pass recovered nothing; whatever was already filed
+                # stays exactly as it is.
                 return AlbumGrabOutcome(
-                    inbox_path=already,
+                    inbox_path=library_dir,
                     album_title=lookup.album.title,
                     album_artist=album_artist,
                     delivered=0,
                     failed=failed,
-                    verified=not (album_level.unverified if library else False),
+                    verified=not album_level.unverified,
                 )
             raise DownloadError(
                 "no tracks could be grabbed: " + failures_text(failed[:5])
             )
         on_stage("moving")
-        if library:
-            # Tracks were filed as they finished; add the folder art.
-            if cover:
-                write_cover_file(library_dir, cover[0], cover[1])
-            destination = library_dir
-        elif patch_into is not None and patch_into.is_dir():
-            # Patch recovered tracks into the still-waiting album folder,
-            # one atomic replace per file, never overwriting.
-            for produced in sorted(staged.iterdir()):
-                target = patch_into / produced.name
-                if target.exists():
-                    continue
-                temp = patch_into / (".%s.beetdrop-tmp" % produced.name)
-                try:
-                    shutil.copyfile(produced, temp)
-                    os.replace(temp, target)
-                finally:
-                    if temp.exists():
-                        temp.unlink()
-            destination = patch_into
-        else:
-            # Folder already imported (or first run): deliver as a normal
-            # album folder; beets merges retried tracks into the same
-            # release on import.
-            destination = deliver(staged, config.inbox, folder_name, cross_fs)
+        if cover:
+            write_cover_file(library_dir, cover[0], cover[1])
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
     return AlbumGrabOutcome(
-        inbox_path=destination,
+        inbox_path=library_dir,
         album_title=lookup.album.title,
         album_artist=album_artist,
         delivered=delivered,
         failed=failed,
-        verified=not (album_level.unverified if library else False),
+        verified=not album_level.unverified,
     )

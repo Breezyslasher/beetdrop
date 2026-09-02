@@ -8,7 +8,7 @@ Endpoints:
     POST /api/jobs/{id}/retry
     GET  /api/settings
     PUT  /api/settings
-    GET  /api/health                  inbox writability and yt-dlp version
+    GET  /api/health                  library writability and yt-dlp version
     GET  /events                      SSE stream of job state changes
 
 Auth is an optional single shared password, LAN-tool grade: when set,
@@ -40,7 +40,7 @@ from .auth import (
     make_session_token,
     verify_password,
 )
-from .config import SUPPORTED_FORMATS, Config, inbox_free_mb, inbox_problem
+from .config import SUPPORTED_FORMATS, Config, storage_free_mb, storage_problem
 from .db import Store
 from .download import ytdlp_version
 from .events import Broadcaster, sse_format
@@ -62,11 +62,9 @@ class GrabRequest(BaseModel):
 class SettingsUpdate(BaseModel):
     output_format: Optional[str] = None
     bitrate: Optional[str] = None
-    inbox: Optional[str] = None
     password: Optional[str] = None
     concurrency: Optional[int] = None
     cookies: Optional[str] = None  # cookies.txt content; "" clears
-    mode: Optional[str] = None  # "inbox" (beets) or "library" (standalone)
     music_root: Optional[str] = None
 
 
@@ -92,8 +90,6 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             config.output_format = stored["output_format"]
         if stored.get("bitrate"):
             config.bitrate = stored["bitrate"]
-        if stored.get("inbox"):
-            config.inbox = Path(stored["inbox"])
         if stored.get("password"):
             config.password = stored["password"]
         if stored.get("concurrency"):
@@ -101,8 +97,6 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
                 config.concurrency = int(stored["concurrency"])
             except ValueError:
                 pass
-        if stored.get("mode") in ("inbox", "library"):
-            config.mode = stored["mode"]
         if stored.get("music_root"):
             config.music_root = Path(stored["music_root"])
         # Cookies uploaded through Settings win over the mounted file.
@@ -132,7 +126,7 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         manager.start()
-        problem = inbox_problem(effective_config().audio_root())
+        problem = storage_problem(effective_config().music_root)
         if problem:
             # Loud at startup, and again in /api/health; the process still
             # serves so the problem is visible over HTTP, not just in logs.
@@ -273,12 +267,10 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
         return {
             "output_format": config.output_format,
             "bitrate": config.bitrate,
-            "inbox": str(config.inbox),
             "password_set": bool(config.password),
             "concurrency": config.concurrency,
             "workers_active": True,  # concurrency changes apply on restart
             "cookies_set": bool(config.cookies_file),
-            "mode": config.mode,
             "music_root": str(config.music_root),
             "ytdlp_version": ytdlp_version(),  # read-only
         }
@@ -289,8 +281,6 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             raise HTTPException(status_code=422, detail="format must be one of %s" % (SUPPORTED_FORMATS,))
         if body.concurrency is not None and not (1 <= body.concurrency <= 4):
             raise HTTPException(status_code=422, detail="concurrency must be 1-4")
-        if body.mode is not None and body.mode not in ("inbox", "library"):
-            raise HTTPException(status_code=422, detail="mode must be inbox or library")
         if body.cookies is not None:
             # Stored as a file because yt-dlp wants a cookiefile path;
             # kept out of the DB and readable only by the app user.
@@ -312,14 +302,13 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
     @app.get("/api/health")
     async def api_health():
         config = effective_config()
-        problem = inbox_problem(config.audio_root(), config.min_free_mb)
+        problem = storage_problem(config.music_root, config.min_free_mb)
         return {
             "status": "ok" if not problem else "degraded",
-            "mode": config.mode,
-            "inbox": str(config.audio_root()),
-            "inbox_writable": not problem,
-            "inbox_problem": problem,
-            "inbox_free_mb": inbox_free_mb(config.inbox),
+            "library": str(config.music_root),
+            "library_writable": not problem,
+            "library_problem": problem,
+            "library_free_mb": storage_free_mb(config.music_root),
             "min_free_mb": config.min_free_mb,
             "ytdlp_version": ytdlp_version(),
             "version": __version__,

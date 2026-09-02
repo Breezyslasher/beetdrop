@@ -64,7 +64,7 @@ class TestSettings:
 
     def test_persists_across_reopen(self, tmp_path):
         store = make_store(tmp_path)
-        store.set_settings({"inbox": "/somewhere"})
+        store.set_settings({"music_root": "/somewhere"})
         store.close()
         reopened = make_store(tmp_path)
-        assert reopened.get_settings() == {"inbox": "/somewhere"}
+        assert reopened.get_settings() == {"music_root": "/somewhere"}

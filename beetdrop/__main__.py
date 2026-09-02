@@ -11,7 +11,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from .config import SUPPORTED_FORMATS, Config, InboxError, check_inbox
+from .config import SUPPORTED_FORMATS, Config, StorageError, check_storage
 from .download import DownloadError, ytdlp_version
 from .grab import run_album_grab, run_grab
 from .search import search_albums, search_songs
@@ -56,7 +56,7 @@ def cmd_search(args, config: Config) -> int:
 
 def cmd_grab(args, config: Config) -> int:
     try:
-        check_inbox(config.inbox, config.min_free_mb)
+        check_storage(config.music_root, config.min_free_mb)
         if args.album:
             outcome = run_album_grab(
                 args.video_id, config,
@@ -70,7 +70,7 @@ def cmd_grab(args, config: Config) -> int:
                     print("failed: track %s - %s: %s" % (
                         failure.get("n", "?"), failure.get("title", "?"),
                         failure.get("reason", "?")), file=sys.stderr)
-            print("done: %d tracks handed off to %s" % (outcome.delivered, outcome.inbox_path))
+            print("done: %d tracks filed to %s" % (outcome.delivered, outcome.inbox_path))
             return 0
         outcome = run_grab(
             args.video_id, config,
@@ -79,10 +79,10 @@ def cmd_grab(args, config: Config) -> int:
             on_resolved=lambda r: print("resolved: %s - %s (%ss)" % (
                 r.artist_display or "?", r.title, r.duration_seconds)),
         )
-    except (DownloadError, ValueError, InboxError) as exc:
+    except (DownloadError, ValueError, StorageError) as exc:
         print("error: %s" % exc, file=sys.stderr)
         return 1
-    print("done: handed off to %s" % outcome.inbox_path)
+    print("done: filed to %s" % outcome.inbox_path)
     return 0
 
 
@@ -111,12 +111,12 @@ def main(argv=None) -> int:
     p_search.add_argument("--albums", action="store_true", help="search albums instead of songs")
     p_search.set_defaults(func=cmd_search)
 
-    p_grab = sub.add_parser("grab", help="download one video or album and hand it to the inbox")
+    p_grab = sub.add_parser("grab", help="download one video or album and file it into the library")
     p_grab.add_argument("video_id", help="videoId, or an album browseId with --album")
     p_grab.add_argument("--album", action="store_true", help="treat the id as an album browseId")
     p_grab.add_argument("--format", choices=SUPPORTED_FORMATS, help="output format (default opus)")
     p_grab.add_argument("--bitrate", help="bitrate for mp3 transcodes")
-    p_grab.add_argument("--inbox", help="inbox path (overrides INBOX_PATH)")
+    p_grab.add_argument("--library", help="music library path (overrides MUSIC_PATH)")
     p_grab.set_defaults(func=cmd_grab)
 
     p_serve = sub.add_parser("serve", help="run the web API")
@@ -129,8 +129,8 @@ def main(argv=None) -> int:
 
     args = parser.parse_args(argv)
     config = Config()
-    if getattr(args, "inbox", None):
-        config.inbox = Path(args.inbox).expanduser()
+    if getattr(args, "library", None):
+        config.music_root = Path(args.library).expanduser()
     return args.func(args, config)
 
 

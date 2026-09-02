@@ -63,8 +63,8 @@ createApp({
     healthTitle() {
       if (!this.health) return "Checking server";
       return this.health.status === "ok"
-        ? "Server ok, inbox writable"
-        : "Problem: " + (this.health.inbox_problem || "server degraded");
+        ? "Server ok, library writable"
+        : "Problem: " + (this.health.library_problem || "server degraded");
     },
   },
 
@@ -178,15 +178,11 @@ createApp({
       if (index >= 0) {
         const previous = this.jobs[index];
         this.jobs[index] = job;
-        // Success message says handed off, not imported: whether it
-        // imports is beets' decision and Beetdrop does not know.
         if (previous.stage !== "done" && job.stage === "done") {
-          this.showToast("Handed off to inbox: " + (job.title || job.video_id));
+          this.showToast("Filed: " + (job.title || job.video_id));
         }
-        // The inbox watcher flagged a grab that beets did not
-        // auto-import; it is waiting for review in beets-flask.
-        if (previous.inbox_state !== "review" && job.inbox_state === "review") {
-          this.showToast("Needs review in beets-flask: " + (job.title || job.video_id));
+        if (previous.inbox_state !== "unverified" && job.inbox_state === "unverified") {
+          this.showToast("No MusicBrainz match - in _review: " + (job.title || job.video_id));
         }
       } else {
         this.jobs.push(job);
@@ -232,11 +228,9 @@ createApp({
       try {
         this.settings = await this.api("/api/settings");
         this.draft = {
-          mode: this.settings.mode,
           music_root: this.settings.music_root,
           output_format: this.settings.output_format,
           bitrate: this.settings.bitrate,
-          inbox: this.settings.inbox,
           concurrency: this.settings.concurrency,
           cookies: "",
           new_password: "",
@@ -250,11 +244,9 @@ createApp({
 
     async saveSettings() {
       const update = {
-        mode: this.draft.mode,
         music_root: this.draft.music_root,
         output_format: this.draft.output_format,
         bitrate: this.draft.bitrate,
-        inbox: this.draft.inbox,
         concurrency: Number(this.draft.concurrency) || undefined,
       };
       if (this.draft.new_password) update.password = this.draft.new_password;

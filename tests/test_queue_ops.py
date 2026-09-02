@@ -18,7 +18,7 @@ from beetdrop.search import Result
 def make_config(tmp_path, **overrides):
     inbox = tmp_path / "inbox"
     inbox.mkdir(exist_ok=True)
-    defaults = dict(inbox=inbox, scratch_root=tmp_path / "scratch",
+    defaults = dict(music_root=inbox, scratch_root=tmp_path / "scratch",
                     config_dir=tmp_path / "config", min_free_mb=0,
                     track_delay="0")
     defaults.update(overrides)
@@ -72,7 +72,7 @@ class TestCancel:
                 for _ in range(500):
                     on_progress(1.0)
                     time.sleep(0.02)
-            destination = cfg.inbox / "Artist - Title"
+            destination = cfg.music_root / "Artist - Title"
             destination.mkdir(parents=True, exist_ok=True)
             return GrabOutcome(inbox_path=destination, result=Result(
                 video_id=video_id, title="Title", raw_title="Title", artists=["Artist"]))
@@ -96,7 +96,7 @@ class TestCancel:
 def fake_ok_grab(video_id, cfg, fmt="", bitrate="", on_stage=lambda s: None,
                  on_progress=lambda p: None, on_resolved=lambda r: None,
                  logger=None):
-    destination = cfg.inbox / ("Artist - %s" % video_id)
+    destination = cfg.music_root / ("Artist - %s" % video_id)
     destination.mkdir(parents=True, exist_ok=True)
     return GrabOutcome(inbox_path=destination, result=Result(
         video_id=video_id, title="Title", raw_title="Title", artists=["Artist"]))
@@ -192,14 +192,18 @@ class TestTrackDelay:
 
     def test_sleep_called_between_album_tracks(self, tmp_path, monkeypatch):
         import beetdrop.grab as grab_module
-        from tests.test_album import make_lookup
+        from tests.test_album import FakeMB, make_lookup
 
         config = make_config(tmp_path, track_delay="1-1")
         sleeps = []
         monkeypatch.setattr(grab_module.time, "sleep", lambda s: sleeps.append(s))
         monkeypatch.setattr(grab_module, "lookup_album", lambda b: make_lookup(3))
         monkeypatch.setattr(grab_module, "verify_audio", lambda p: None)
-        monkeypatch.setattr(grab_module, "write_seed_tags", lambda p, s: None)
+        monkeypatch.setattr(grab_module, "write_full_tags",
+                            lambda p, t, c=None, m="image/jpeg": None)
+        monkeypatch.setattr(grab_module, "get_mb_client", lambda c: FakeMB())
+        monkeypatch.setattr(grab_module, "resolve_album",
+                            lambda mb, t, a, tracks: None)
 
         def fake_download(video_id, scratch_dir, fmt="opus", **kwargs):
             scratch_dir.mkdir(parents=True, exist_ok=True)

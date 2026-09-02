@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+import mutagen
 from mutagen.flac import Picture
 from mutagen.id3 import APIC, COMM, ID3, TALB, TDRC, TIT2, TPE1, TPE2, TPOS, TRCK, TXXX, UFID, USLT
 from mutagen.mp3 import MP3
@@ -176,3 +177,13 @@ def _write_mp4(path, tags, cover, cover_mime):
                         else MP4Cover.FORMAT_JPEG)
         audio["covr"] = [MP4Cover(cover, imageformat=image_format)]
     audio.save()
+
+
+def verify_audio(path: Path) -> None:
+    """The file must exist, be non-empty, and open as valid audio."""
+    if not path.is_file():
+        raise ValueError("produced file is missing: %s" % path)
+    if path.stat().st_size == 0:
+        raise ValueError("produced file is empty: %s" % path)
+    if mutagen.File(str(path)) is None:
+        raise ValueError("produced file is not recognisable audio: %s" % path)

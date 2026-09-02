@@ -1,4 +1,4 @@
-"""Filing-mode plumbing: settings, health, job states, sweep guard."""
+"""Library filing plumbing: settings, health, and job states."""
 
 import time
 
@@ -13,11 +13,9 @@ from beetdrop.search import Result
 
 
 def make_config(tmp_path, **overrides):
-    inbox = tmp_path / "inbox"
-    inbox.mkdir(exist_ok=True)
     music = tmp_path / "music"
     music.mkdir(exist_ok=True)
-    defaults = dict(inbox=inbox, music_root=music,
+    defaults = dict(music_root=music,
                     scratch_root=tmp_path / "scratch",
                     config_dir=tmp_path / "config", min_free_mb=0,
                     track_delay="0")
@@ -51,32 +49,31 @@ def grab_faker(verified):
     return fake
 
 
-class TestModeSettings:
-    def test_mode_roundtrip_and_validation(self, tmp_path):
+class TestLibrarySettings:
+    def test_music_root_roundtrip(self, tmp_path):
         config = make_config(tmp_path)
+        other = tmp_path / "other-library"
+        other.mkdir()
         with TestClient(create_app(config)) as client:
-            assert client.get("/api/settings").json()["mode"] == "inbox"
-            assert client.put("/api/settings", json={"mode": "sideways"}).status_code == 422
+            assert client.get("/api/settings").json()["music_root"] == str(config.music_root)
             body = client.put("/api/settings",
-                              json={"mode": "library",
-                                    "music_root": str(config.music_root)}).json()
-            assert body["mode"] == "library"
-            assert body["music_root"] == str(config.music_root)
+                              json={"music_root": str(other)}).json()
+            assert body["music_root"] == str(other)
             health = client.get("/api/health").json()
-            assert health["mode"] == "library"
+            assert health["library"] == str(other)
+            assert health["library_writable"] is True
 
-    def test_health_checks_active_root(self, tmp_path):
-        config = make_config(tmp_path, mode="library",
-                             music_root=tmp_path / "missing-library")
+    def test_health_flags_missing_library(self, tmp_path):
+        config = make_config(tmp_path, music_root=tmp_path / "missing-library")
         with TestClient(create_app(config)) as client:
             health = client.get("/api/health").json()
         assert health["status"] == "degraded"
-        assert "missing-library" in health["inbox_problem"]
+        assert "missing-library" in health["library_problem"]
 
 
-class TestLibraryJobStates:
+class TestFilingStates:
     def test_verified_grab_marks_filed(self, tmp_path, monkeypatch):
-        config = make_config(tmp_path, mode="library")
+        config = make_config(tmp_path)
         monkeypatch.setattr(jobs_module, "run_grab", grab_faker(verified=True))
         with TestClient(create_app(config)) as client:
             job = client.post("/api/grab", json={"video_id": "v1"}).json()
@@ -85,27 +82,9 @@ class TestLibraryJobStates:
         assert finished["inbox_state"] == "filed"
 
     def test_unverified_grab_marked(self, tmp_path, monkeypatch):
-        config = make_config(tmp_path, mode="library")
+        config = make_config(tmp_path)
         monkeypatch.setattr(jobs_module, "run_grab", grab_faker(verified=False))
         with TestClient(create_app(config)) as client:
             job = client.post("/api/grab", json={"video_id": "v1"}).json()
             finished = wait_done(client, job["id"])
         assert finished["inbox_state"] == "unverified"
-
-    def test_sweep_leaves_library_jobs_alone(self, tmp_path, monkeypatch):
-        config = make_config(tmp_path, mode="library")
-        monkeypatch.setattr(jobs_module, "run_grab", grab_faker(verified=True))
-        with TestClient(create_app(config)) as client:
-            job = client.post("/api/grab", json={"video_id": "v1"}).json()
-            wait_done(client, job["id"])
-            app_manager = None
-            # Drive a sweep directly with an aggressive grace period: a
-            # filed job must never flip to review or picked_up.
-            from beetdrop.db import Store
-            from beetdrop.events import Broadcaster
-            from beetdrop.jobs import JobManager
-            manager = JobManager(Store(config.db_path), Broadcaster(), lambda: config)
-            manager.sweep_inbox(review_after=-1)
-            refreshed = next(j for j in client.get("/api/jobs").json()["jobs"]
-                             if j["id"] == job["id"])
-        assert refreshed["inbox_state"] == "filed"
