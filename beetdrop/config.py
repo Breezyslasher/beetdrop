@@ -54,6 +54,8 @@ class Config:
     keep_days: int = field(default_factory=lambda: int(_env("KEEP_DAYS", "30")))
     # The music library Beetdrop tags and files into.
     music_root: Path = field(default_factory=lambda: Path(os.environ.get("MUSIC_PATH", "/music")))
+    # Fetch synced (timed) lyrics from LRCLIB and write a .lrc sidecar.
+    lyrics_enabled: bool = field(default_factory=lambda: _env("LYRICS", "1") not in ("0", "false", "no", ""))
 
     def track_delay_range(self) -> tuple:
         try:

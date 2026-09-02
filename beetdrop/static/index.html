@@ -178,6 +178,12 @@
         Library {{ health.library_writable ? 'is writable.' : 'problem: ' + health.library_problem }}
       </p>
 
+      <label class="checkrow">
+        <input type="checkbox" v-model="draft.lyrics">
+        Synced lyrics (writes a .lrc sidecar from LRCLIB when timed
+        lyrics exist)
+      </label>
+
       <label>Concurrent downloads
         <select v-model="draft.concurrency">
           <option :value="1">1</option>

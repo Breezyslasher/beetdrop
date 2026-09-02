@@ -244,3 +244,20 @@ def write_cover_file(directory: Path, cover: bytes, mime: str) -> None:
     finally:
         if temp.exists():
             temp.unlink()
+
+
+def write_lyrics_sidecar(audio_path: Path, lrc_text: str) -> Path:
+    """A .lrc sidecar next to the audio file, same basename - the
+    convention players use to pair synced lyrics with a track. Atomic,
+    and does not overwrite an existing sidecar."""
+    target = audio_path.with_suffix(".lrc")
+    if target.exists():
+        return target
+    temp = target.parent / (".%s.beetdrop-tmp" % target.name)
+    try:
+        temp.write_text(lrc_text, encoding="utf-8")
+        os.replace(temp, target)
+    finally:
+        if temp.exists():
+            temp.unlink()
+    return target

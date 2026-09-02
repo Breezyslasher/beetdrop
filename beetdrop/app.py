@@ -67,6 +67,7 @@ class SettingsUpdate(BaseModel):
     concurrency: Optional[int] = None
     cookies: Optional[str] = None  # cookies.txt content; "" clears
     music_root: Optional[str] = None
+    lyrics: Optional[bool] = None
 
 
 class LoginRequest(BaseModel):
@@ -105,6 +106,8 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
                 pass
         if stored.get("music_root") and not music_locked:
             config.music_root = Path(stored["music_root"])
+        if stored.get("lyrics") in ("0", "1"):
+            config.lyrics_enabled = stored["lyrics"] == "1"
         # Cookies uploaded through Settings win over the mounted file.
         if uploaded_cookies.is_file() and uploaded_cookies.stat().st_size > 0:
             config.cookies_file = str(uploaded_cookies)
@@ -279,6 +282,7 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             "cookies_set": bool(config.cookies_file),
             "music_root": str(config.music_root),
             "music_root_locked": music_locked,  # env-controlled; hide field
+            "lyrics": config.lyrics_enabled,
             "ytdlp_version": ytdlp_version(),  # read-only
         }
 
@@ -303,6 +307,8 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
                 uploaded_cookies.unlink()
         updates = {k: v for k, v in body.model_dump().items()
                    if v is not None and k != "cookies"}
+        if "lyrics" in updates:
+            updates["lyrics"] = "1" if updates["lyrics"] else "0"
         if updates.get("password"):
             # Hashed at rest; changing it also invalidates every session,
             # since the hash is part of the token signing key.
