@@ -32,7 +32,9 @@
               @click="setSearchType('songs')">Songs</button>
       <button type="button" :class="{active: searchType === 'albums'}"
               @click="setSearchType('albums')">Albums</button>
-      <select v-model="grabFormat" class="formatpick" aria-label="Format for grabs">
+      <button type="button" :class="{active: searchType === 'videos'}"
+              @click="setSearchType('videos')">Videos</button>
+      <select v-if="searchType !== 'videos'" v-model="grabFormat" class="formatpick" aria-label="Format for grabs">
         <option value="">Format: default</option>
         <option value="opus">Format: opus</option>
         <option value="m4a">Format: m4a</option>
@@ -41,7 +43,7 @@
     </div>
     <div class="searchrow">
       <input v-model="query" type="search" inputmode="search" enterkeyhint="search"
-             :placeholder="searchType === 'albums' ? 'Search an album...' : 'Search a song...'"
+             :placeholder="searchType === 'albums' ? 'Search an album...' : (searchType === 'videos' ? 'Search a music video...' : 'Search a song...')"
              autocomplete="off" autocapitalize="off">
       <button type="submit" class="primary" :disabled="searching || !query.trim()">
         {{ searching ? 'Searching' : 'Search' }}
@@ -51,22 +53,24 @@
 
   <main class="results">
     <p v-if="!searched && !results.length" class="hint">
-      Search for a song or album, check the duration, and grab it. Beetdrop
-      matches it on MusicBrainz, tags it fully with cover art, and files it
-      into your library.
+      Search for a song, album, or music video, check the duration, and
+      grab it. Beetdrop matches it on MusicBrainz, tags it fully with cover
+      art, and files it into your library. Music videos are filed Kodi-style
+      with an .nfo and poster.
     </p>
     <p v-if="searched && !searching && !results.length" class="hint">No results.</p>
 
-    <template v-if="resultsType === 'songs'">
+    <template v-if="resultsType === 'songs' || resultsType === 'videos'">
       <article v-for="r in results" :key="r.video_id" class="card">
         <img v-if="r.thumbnail_url" class="thumb" :src="r.thumbnail_url" alt="" loading="lazy">
         <div v-else class="thumb thumb-blank"></div>
         <div class="meta">
           <span class="title" :title="r.raw_title">{{ r.title }}</span>
           <span class="artist">{{ r.artists.join(', ') || 'Unknown artist' }}<template v-if="r.album"> &middot; {{ r.album }}</template></span>
-          <span class="duration">{{ fmtDuration(r.duration_seconds) }}</span>
+          <span class="duration">{{ fmtDuration(r.duration_seconds) }}<template v-if="resultsType === 'videos'"> &middot; video</template></span>
         </div>
-        <button class="grab primary" type="button" @click="grab(r, 'track')"
+        <button class="grab primary" type="button"
+                @click="grab(r, resultsType === 'videos' ? 'musicvideo' : 'track')"
                 :disabled="grabbing[r.video_id]">
           {{ grabbing[r.video_id] ? 'Queued' : 'Grab' }}
         </button>
@@ -155,6 +159,29 @@
         Each grab is matched against MusicBrainz, gets full tags and
         cover art, and is filed straight into the library. Grabs that
         cannot be verified go to the _review folder instead.
+      </p>
+
+      <label v-if="settings && !settings.video_root_locked">Music-video library path
+        <input v-model="draft.video_root" type="text" spellcheck="false">
+      </label>
+      <p class="note" v-if="settings && settings.video_root_locked">
+        Videos: <code>{{ settings.video_root }}</code> (set by VIDEO_PATH;
+        change the volume in your compose file, not here).
+      </p>
+      <label>Max video quality
+        <select v-model.number="draft.video_max_height">
+          <option :value="720">720p</option>
+          <option :value="1080">1080p (default)</option>
+          <option :value="1440">1440p</option>
+          <option :value="2160">2160p (4K)</option>
+          <option :value="0">Best available</option>
+        </select>
+      </label>
+      <p class="note">
+        The Videos tab grabs music videos as mp4 and files them Kodi-style
+        ({Artist}/{Artist} - {Title}.mp4) with a .nfo and -poster.jpg
+        beside each one. Empty path defaults to a "Music Videos" folder in
+        your music library.
       </p>
 
       <label>Output format

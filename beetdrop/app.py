@@ -46,7 +46,7 @@ from .db import Store
 from .download import ytdlp_version
 from .events import Broadcaster, sse_format
 from .jobs import JobManager
-from .search import search_albums, search_songs
+from .search import search_albums, search_songs, search_videos
 
 SSE_KEEPALIVE_SECONDS = 15
 STATIC_DIR = Path(__file__).parent / "static"
@@ -70,6 +70,8 @@ class SettingsUpdate(BaseModel):
     lyrics: Optional[bool] = None
     lyrics_provider: Optional[str] = None  # "lrclib" | "musixmatch"
     musixmatch_token: Optional[str] = None  # "" clears
+    video_root: Optional[str] = None
+    video_max_height: Optional[int] = None
 
 
 class LoginRequest(BaseModel):
@@ -90,6 +92,9 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
     # setting an unmounted host path there just breaks writes. The env value
     # then wins over any stored override.
     music_locked = "MUSIC_PATH" in os.environ
+    # Same reasoning for the video library: when VIDEO_PATH pins it to a
+    # container mount, the UI must not offer to repoint it off the mount.
+    video_locked = "VIDEO_PATH" in os.environ
 
     def effective_config() -> Config:
         """Environment defaults, overridden by settings stored in SQLite."""
@@ -114,6 +119,13 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             config.musixmatch_token = stored["mxm_token"]
         if stored.get("lyrics_provider") in ("lrclib", "musixmatch"):
             config.lyrics_provider = stored["lyrics_provider"]
+        if stored.get("video_root") and not video_locked:
+            config.video_root = Path(stored["video_root"])
+        if stored.get("video_max_height"):
+            try:
+                config.video_max_height = int(stored["video_max_height"])
+            except ValueError:
+                pass
         # Cookies uploaded through Settings win over the mounted file.
         if uploaded_cookies.is_file() and uploaded_cookies.stat().st_size > 0:
             config.cookies_file = str(uploaded_cookies)
@@ -226,12 +238,14 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
 
     @app.get("/api/search", dependencies=[protected])
     async def api_search(q: str, limit: int = 8, type: str = "songs"):
-        if type not in ("songs", "albums"):
-            raise HTTPException(status_code=422, detail="type must be songs or albums")
+        if type not in ("songs", "albums", "videos"):
+            raise HTTPException(status_code=422,
+                                detail="type must be songs, albums, or videos")
         limit = max(1, min(limit, 20))
         # to_thread keeps the loop free; downloads run in their own pool,
         # so a search never waits behind one.
-        search = search_albums if type == "albums" else search_songs
+        search = {"albums": search_albums, "videos": search_videos}.get(
+            type, search_songs)
         results = await asyncio.to_thread(search, q, limit)
         return {"type": type, "results": [asdict(r) for r in results]}
 
@@ -239,8 +253,9 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
     async def api_grab(body: GrabRequest):
         if body.format and body.format not in SUPPORTED_FORMATS:
             raise HTTPException(status_code=422, detail="format must be one of %s" % (SUPPORTED_FORMATS,))
-        if body.kind not in ("track", "album"):
-            raise HTTPException(status_code=422, detail="kind must be track or album")
+        if body.kind not in ("track", "album", "musicvideo"):
+            raise HTTPException(status_code=422,
+                                detail="kind must be track, album, or musicvideo")
         if not body.video_id.strip():
             raise HTTPException(status_code=422, detail="video_id is required")
         video_id = body.video_id.strip()
@@ -291,6 +306,9 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             "lyrics": config.lyrics_enabled,
             "lyrics_provider": config.lyrics_provider,
             "musixmatch_token_set": bool(config.musixmatch_token),
+            "video_root": str(config.video_root),
+            "video_root_locked": video_locked,  # env-controlled; hide field
+            "video_max_height": config.video_max_height,
             "ytdlp_version": ytdlp_version(),  # read-only
         }
 
@@ -304,6 +322,13 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             raise HTTPException(
                 status_code=422,
                 detail="music library path is set by MUSIC_PATH and cannot be changed here")
+        if body.video_root is not None and video_locked:
+            raise HTTPException(
+                status_code=422,
+                detail="video library path is set by VIDEO_PATH and cannot be changed here")
+        if body.video_max_height is not None and not (0 <= body.video_max_height <= 4320):
+            raise HTTPException(status_code=422,
+                                detail="video_max_height must be 0-4320")
         if body.cookies is not None:
             # Stored as a file because yt-dlp wants a cookiefile path;
             # kept out of the DB and readable only by the app user.

@@ -18,7 +18,7 @@ from .config import Config, check_storage
 from .db import Store
 from .download import LogCollector
 from .events import Broadcaster
-from .grab import failures_text, run_album_grab, run_grab
+from .grab import failures_text, run_album_grab, run_grab, run_video_grab
 
 DEFAULT_CONCURRENCY = 2
 PROGRESS_MIN_INTERVAL = 0.5  # seconds between persisted progress updates
@@ -164,6 +164,23 @@ class JobManager:
             return "filed" if verified else "unverified"
 
         try:
+            if job["kind"] == "musicvideo":
+                # The video root is a subfolder we create on first use; make
+                # it before the writability check so a fresh install works.
+                config.video_root.mkdir(parents=True, exist_ok=True)
+                check_storage(config.video_root, config.min_free_mb)
+                outcome = run_video_grab(
+                    job["video_id"], config,
+                    on_stage=on_stage, on_progress=on_progress,
+                    on_resolved=lambda result: self._update(
+                        job_id, title=result.title, artist=result.artist_display),
+                    logger=collector,
+                )
+                self._update(job_id, stage="done", progress=100.0,
+                             log=collector.text()[:20000],
+                             inbox_path=str(outcome.inbox_path),
+                             inbox_state=audio_state(outcome.verified))
+                return
             check_storage(config.music_root, config.min_free_mb)
             if job["kind"] == "album":
                 only_tracks = None

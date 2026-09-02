@@ -118,5 +118,66 @@ def download_audio(
     return produced
 
 
+def download_video(
+    video_id: str,
+    scratch_dir: Path,
+    max_height: int = 1080,
+    cookies_file: str = "",
+    progress_hook: Optional[Callable[[dict], None]] = None,
+    postprocessor_hook: Optional[Callable[[dict], None]] = None,
+    logger: Optional[LogCollector] = None,
+) -> Path:
+    """Download the music video (video+audio) merged to a single .mp4 and
+    return its path. Height is capped at max_height (0 = uncapped) to keep
+    files sensible; yt-dlp merges the best compatible streams."""
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+
+    cap = ("[height<=%d]" % max_height) if max_height and max_height > 0 else ""
+    # Prefer mp4/m4a so the merge is a clean remux; fall back progressively
+    # so a video that lacks a separate mp4 track still comes down.
+    fmt = ("bestvideo{cap}[ext=mp4]+bestaudio[ext=m4a]/"
+           "bestvideo{cap}+bestaudio/best{cap}/best").format(cap=cap)
+
+    ydl_opts = {
+        "format": fmt,
+        "outtmpl": str(scratch_dir / "%(id)s.%(ext)s"),
+        "merge_output_format": "mp4",
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+    }
+    if cookies_file:
+        ydl_opts["cookiefile"] = cookies_file
+    if progress_hook:
+        ydl_opts["progress_hooks"] = [progress_hook]
+    if postprocessor_hook:
+        ydl_opts["postprocessor_hooks"] = [postprocessor_hook]
+    if logger is not None:
+        ydl_opts["logger"] = logger
+
+    # Music videos are standard YouTube uploads; the plain watch URL is the
+    # right entry point for the videoIds the "videos" search returns.
+    url = "https://www.youtube.com/watch?v=%s" % video_id
+    ydl_class = yt_dlp.YoutubeDL
+    ydl_error = yt_dlp.utils.DownloadError
+    try:
+        with ydl_class(ydl_opts) as ydl:
+            ydl.download([url])
+    except ydl_error as exc:
+        raise DownloadError(str(exc)) from exc
+
+    produced = scratch_dir / ("%s.mp4" % video_id)
+    if not produced.is_file():
+        leftovers = [
+            p for p in sorted(scratch_dir.glob("%s.*" % video_id))
+            if p.suffix not in (".part", ".ytdl")
+        ]
+        if not leftovers:
+            raise DownloadError("yt-dlp produced no video output for %s" % video_id)
+        produced = leftovers[0]
+    return produced
+
+
 def ytdlp_version() -> str:
     return yt_dlp.version.__version__

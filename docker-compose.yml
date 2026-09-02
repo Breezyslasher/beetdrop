@@ -47,6 +47,13 @@ services:
       # - BEETDROP_LYRICS_PROVIDER=lrclib   # or musixmatch
       # - BEETDROP_MXM_TOKEN=
 
+      # Optional: music videos (Videos tab). By default they file into a
+      # "Music Videos" subfolder of /music - no extra mount needed. Set
+      # VIDEO_PATH to a separate mount to keep Kodi's Music Videos source
+      # fully separate. Quality caps at 1080p unless changed here/Settings.
+      # - VIDEO_PATH=/musicvideos            # and add a /musicvideos volume
+      # - BEETDROP_VIDEO_MAX_HEIGHT=1080     # 720/1080/1440/2160, 0 = uncapped
+
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/api/health', timeout=4)"]
       interval: 30s

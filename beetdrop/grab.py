@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .config import Config
-from .download import DownloadError, download_audio
+from .download import DownloadError, download_audio, download_video
 from .fulltags import FullTags, verify_audio, write_full_tags
 from .library import (
     album_dir,
@@ -35,6 +35,7 @@ from .library import (
 from .lyrics import fetch_synced_lyrics
 from .mb import MusicBrainzClient
 from .search import AlbumLookup, Result, lookup_album, lookup_video
+from .videos import video_dir, video_filename, write_nfo, write_poster
 
 # Stage labels, in pipeline order. "queued", "done" and "failed" are owned
 # by the job layer.
@@ -160,6 +161,99 @@ def run_grab(
                                      result.duration_seconds)
         return GrabOutcome(inbox_path=final, result=result,
                            verified=resolution.matched)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+@dataclass
+class VideoGrabOutcome:
+    inbox_path: Path  # final video file path (column name kept for history)
+    result: Result
+    verified: bool = True  # False means no MusicBrainz match (still filed)
+
+
+def _finish_video(config: Config, video_path: Path, tags: FullTags,
+                  cover, duration_seconds=None) -> Path:
+    """Embed basic metadata, file the video Kodi-style, and drop the .nfo
+    and -poster.jpg sidecars beside it."""
+    cover_bytes, cover_mime = (cover[0], cover[1]) if cover else (None, "image/jpeg")
+    try:
+        write_full_tags(video_path, tags, cover_bytes, cover_mime)
+    except Exception:
+        # A container mutagen cannot tag still files fine; the NFO carries
+        # the metadata Kodi actually reads.
+        pass
+    directory = video_dir(config.video_root, tags)
+    final = place_file(video_path, directory / video_filename(tags))
+    write_nfo(final, tags, duration_seconds)
+    if cover_bytes:
+        write_poster(final, cover_bytes, cover_mime)
+    return final
+
+
+def run_video_grab(
+    video_id: str,
+    config: Config,
+    max_height: int = 0,
+    on_stage: Callable[[str], None] = _noop,
+    on_progress: Callable[[float], None] = _noop,
+    on_resolved: Callable[[Result], None] = _noop,
+    logger=None,
+) -> VideoGrabOutcome:
+    """Grab one music video: download video+audio merged to mp4, best-effort
+    match against MusicBrainz for a clean artist/title/album, and file it
+    into the video library with a Kodi .nfo and poster. Unlike an audio
+    grab, a video that does not match MusicBrainz is still filed (a video
+    is the point); the match only enriches its metadata."""
+    max_height = max_height or config.video_max_height
+
+    job_id = uuid.uuid4().hex[:12]
+    scratch = config.scratch_root / job_id
+    config.scratch_root.mkdir(parents=True, exist_ok=True)
+
+    on_stage("searching")
+    result = lookup_video(video_id)
+    on_resolved(result)
+
+    def progress_hook(data: dict) -> None:
+        if data.get("status") != "downloading":
+            return
+        total = data.get("total_bytes") or data.get("total_bytes_estimate")
+        downloaded = data.get("downloaded_bytes")
+        if total and downloaded is not None:
+            on_progress(min(100.0, downloaded / total * 100.0))
+
+    try:
+        on_stage("downloading")
+        video_path = download_video(
+            video_id, scratch, max_height=max_height,
+            cookies_file=config.cookies_file,
+            progress_hook=progress_hook, logger=logger)
+        verify_audio(video_path)
+
+        on_stage("matching")
+        mb = get_mb_client(config)
+        resolution = resolve_track(
+            mb, result.title, result.primary_artist, result.duration_seconds)
+        if resolution.matched:
+            tags = resolution.tags
+        else:
+            # No MB match: keep the YouTube identity, no invented album.
+            tags = FullTags(
+                title=result.title,
+                artist=result.primary_artist or "Unknown Artist",
+                album_artist=result.primary_artist or "Unknown Artist")
+        cover = mb.fetch_cover(
+            release_mbid=tags.release_mbid,
+            release_group_mbid=tags.release_group_mbid,
+            thumbnail_url=result.thumbnail_url)
+
+        on_stage("tagging")
+        on_stage("moving")
+        final = _finish_video(config, video_path, tags, cover,
+                              result.duration_seconds)
+        return VideoGrabOutcome(inbox_path=final, result=result,
+                                verified=resolution.matched)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 

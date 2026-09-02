@@ -4,7 +4,7 @@
    responses and the SSE stream are never cached - job state and search
    results must always be live. */
 
-const CACHE = "beetdrop-shell-v9";
+const CACHE = "beetdrop-shell-v10";
 const SHELL = [
   "/",
   "/static/style.css",

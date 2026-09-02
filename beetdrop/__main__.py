@@ -13,8 +13,8 @@ from pathlib import Path
 
 from .config import SUPPORTED_FORMATS, Config, StorageError, check_storage
 from .download import DownloadError, ytdlp_version
-from .grab import run_album_grab, run_grab
-from .search import search_albums, search_songs
+from .grab import run_album_grab, run_grab, run_video_grab
+from .search import search_albums, search_songs, search_videos
 
 
 def _format_duration(seconds) -> str:
@@ -38,7 +38,8 @@ def cmd_search(args, config: Config) -> int:
                 (", " + album.album_type) if album.album_type else "",
             ))
         return 0
-    results = search_songs(args.query, limit=args.limit)
+    search = search_videos if args.videos else search_songs
+    results = search(args.query, limit=args.limit)
     if not results:
         print("no results")
         return 1
@@ -56,6 +57,18 @@ def cmd_search(args, config: Config) -> int:
 
 def cmd_grab(args, config: Config) -> int:
     try:
+        if args.video:
+            config.video_root.mkdir(parents=True, exist_ok=True)
+            check_storage(config.video_root, config.min_free_mb)
+            outcome = run_video_grab(
+                args.video_id, config,
+                on_stage=lambda stage: print("stage: %s" % stage),
+                on_resolved=lambda r: print("resolved: %s - %s (%ss)" % (
+                    r.artist_display or "?", r.title, r.duration_seconds)),
+            )
+            print("done: %s filed to %s" % (
+                "matched" if outcome.verified else "unmatched", outcome.inbox_path))
+            return 0
         check_storage(config.music_root, config.min_free_mb)
         if args.album:
             outcome = run_album_grab(
@@ -109,11 +122,14 @@ def main(argv=None) -> int:
     p_search.add_argument("query")
     p_search.add_argument("--limit", type=int, default=8)
     p_search.add_argument("--albums", action="store_true", help="search albums instead of songs")
+    p_search.add_argument("--videos", action="store_true", help="search music videos instead of songs")
     p_search.set_defaults(func=cmd_search)
 
     p_grab = sub.add_parser("grab", help="download one video or album and file it into the library")
     p_grab.add_argument("video_id", help="videoId, or an album browseId with --album")
     p_grab.add_argument("--album", action="store_true", help="treat the id as an album browseId")
+    p_grab.add_argument("--video", action="store_true",
+                        help="grab as a music video (mp4 + Kodi .nfo + poster)")
     p_grab.add_argument("--format", choices=SUPPORTED_FORMATS, help="output format (default opus)")
     p_grab.add_argument("--bitrate", help="bitrate for mp3 transcodes")
     p_grab.add_argument("--library", help="music library path (overrides MUSIC_PATH)")

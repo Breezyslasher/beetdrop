@@ -116,6 +116,21 @@ def search_songs(query: str, limit: int = DEFAULT_LIMIT) -> list[Result]:
     return results
 
 
+def search_videos(query: str, limit: int = DEFAULT_LIMIT) -> list[Result]:
+    """Music videos, normalised to the same Result shape as songs. Each
+    carries a standard YouTube videoId that grabs as a music video."""
+    yt = YTMusic()
+    rows = yt.search(query, filter="videos", limit=limit)
+    results = []
+    for row in rows:
+        result = _normalise(row)
+        if result:
+            results.append(result)
+        if len(results) >= limit:
+            break
+    return results
+
+
 def _parse_album_row(row: dict) -> Optional[AlbumResult]:
     browse_id = row.get("browseId")
     if not browse_id:

@@ -10,6 +10,7 @@ import os
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 def _env(name: str, default: str) -> str:
     """BEETDROP_* wins; the legacy TRACKPULL_* name is still honored so
@@ -54,6 +55,16 @@ class Config:
     keep_days: int = field(default_factory=lambda: int(_env("KEEP_DAYS", "30")))
     # The music library Beetdrop tags and files into.
     music_root: Path = field(default_factory=lambda: Path(os.environ.get("MUSIC_PATH", "/music")))
+    # Where music videos are filed, Kodi-style ({Artist}/{Artist} - {Title}
+    # .mp4 + .nfo + -poster.jpg). Defaults to a dedicated subfolder of the
+    # music library so no extra mount is needed; VIDEO_PATH overrides it
+    # (e.g. onto its own disk). None here means "resolve from music_root".
+    video_root: Optional[Path] = field(
+        default_factory=lambda: Path(os.environ["VIDEO_PATH"])
+        if os.environ.get("VIDEO_PATH") else None)
+    # Cap on downloaded video height (px). 1080 keeps files sensible; 0
+    # means no cap (grab 4K when offered).
+    video_max_height: int = field(default_factory=lambda: int(_env("VIDEO_MAX_HEIGHT", "1080")))
     # Fetch synced (timed) lyrics from LRCLIB and write a .lrc sidecar.
     lyrics_enabled: bool = field(default_factory=lambda: _env("LYRICS", "1") not in ("0", "false", "no", ""))
     # Primary synced-lyrics source: "lrclib" (default, free, no token) or
@@ -61,6 +72,13 @@ class Config:
     # is not primary is used as the fallback.
     lyrics_provider: str = field(default_factory=lambda: _env("LYRICS_PROVIDER", "lrclib"))
     musixmatch_token: str = field(default_factory=lambda: _env("MXM_TOKEN", ""))
+
+    def __post_init__(self):
+        # A blank video_root lives beside the music library so a single
+        # /music mount covers both, while staying a separate subtree Kodi
+        # can point a Music Videos source at.
+        if self.video_root is None:
+            self.video_root = self.music_root / "Music Videos"
 
     def track_delay_range(self) -> tuple:
         try:
