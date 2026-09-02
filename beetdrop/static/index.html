@@ -144,9 +144,13 @@
         </select>
       </label>
 
-      <label>Music library path
+      <label v-if="settings && !settings.music_root_locked">Music library path
         <input v-model="draft.music_root" type="text" spellcheck="false">
       </label>
+      <p class="note" v-if="settings && settings.music_root_locked">
+        Library: <code>{{ settings.music_root }}</code> (set by the
+        container mount; change the volume in your compose file, not here).
+      </p>
       <p class="note">
         Each grab is matched against MusicBrainz, gets full tags and
         cover art, and is filed straight into the library. Grabs that

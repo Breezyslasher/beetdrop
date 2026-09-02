@@ -20,6 +20,7 @@ container healthchecks work.
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -81,6 +82,11 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
     broadcaster = Broadcaster()
 
     uploaded_cookies = base.config_dir / "cookies.txt"
+    # When MUSIC_PATH is set (always true in the Docker image), the library
+    # location is the container mount and must NOT be editable from the UI:
+    # setting an unmounted host path there just breaks writes. The env value
+    # then wins over any stored override.
+    music_locked = "MUSIC_PATH" in os.environ
 
     def effective_config() -> Config:
         """Environment defaults, overridden by settings stored in SQLite."""
@@ -97,7 +103,7 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
                 config.concurrency = int(stored["concurrency"])
             except ValueError:
                 pass
-        if stored.get("music_root"):
+        if stored.get("music_root") and not music_locked:
             config.music_root = Path(stored["music_root"])
         # Cookies uploaded through Settings win over the mounted file.
         if uploaded_cookies.is_file() and uploaded_cookies.stat().st_size > 0:
@@ -272,6 +278,7 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             "workers_active": True,  # concurrency changes apply on restart
             "cookies_set": bool(config.cookies_file),
             "music_root": str(config.music_root),
+            "music_root_locked": music_locked,  # env-controlled; hide field
             "ytdlp_version": ytdlp_version(),  # read-only
         }
 
@@ -281,6 +288,10 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             raise HTTPException(status_code=422, detail="format must be one of %s" % (SUPPORTED_FORMATS,))
         if body.concurrency is not None and not (1 <= body.concurrency <= 4):
             raise HTTPException(status_code=422, detail="concurrency must be 1-4")
+        if body.music_root is not None and music_locked:
+            raise HTTPException(
+                status_code=422,
+                detail="music library path is set by MUSIC_PATH and cannot be changed here")
         if body.cookies is not None:
             # Stored as a file because yt-dlp wants a cookiefile path;
             # kept out of the DB and readable only by the app user.
