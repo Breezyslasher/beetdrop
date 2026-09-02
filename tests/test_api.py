@@ -27,7 +27,7 @@ def client(tmp_path, monkeypatch):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     config = Config(
-        inbox=inbox,
+        music_root=inbox,
         scratch_root=tmp_path / "scratch",
         config_dir=tmp_path / "config",
     )
@@ -43,7 +43,7 @@ def client(tmp_path, monkeypatch):
         on_progress(100.0)
         if video_id == "boom":
             raise ValueError("simulated failure")
-        destination = cfg.inbox / "Artist - Title"
+        destination = cfg.music_root / "Artist - Title"
         destination.mkdir(parents=True, exist_ok=True)
         return GrabOutcome(inbox_path=destination, result=result)
 
@@ -70,20 +70,20 @@ class TestHealth:
     def test_ok(self, client):
         body = client.get("/api/health").json()
         assert body["status"] == "ok"
-        assert body["inbox_writable"] is True
+        assert body["library_writable"] is True
         assert body["ytdlp_version"]
 
-    def test_degraded_when_inbox_missing(self, tmp_path):
+    def test_degraded_when_library_missing(self, tmp_path):
         config = Config(
-            inbox=tmp_path / "missing",
+            music_root=tmp_path / "missing",
             scratch_root=tmp_path / "scratch",
             config_dir=tmp_path / "config",
         )
         with TestClient(create_app(config)) as test_client:
             body = test_client.get("/api/health").json()
         assert body["status"] == "degraded"
-        assert body["inbox_writable"] is False
-        assert "missing" in body["inbox_problem"]
+        assert body["library_writable"] is False
+        assert "missing" in body["library_problem"]
 
 
 class TestGrab:
@@ -96,7 +96,7 @@ class TestGrab:
         assert finished["title"] == "Title"
         assert finished["artist"] == "Artist"
         assert finished["inbox_path"].endswith("Artist - Title")
-        assert finished["inbox_state"] == "waiting"
+        assert finished["inbox_state"] == "filed"
 
     def test_failure_records_error(self, client):
         job = client.post("/api/grab", json={"video_id": "boom"}).json()
@@ -132,14 +132,14 @@ class TestGrab:
         def fake_album_grab(browse_id, cfg, fmt="", bitrate="",
                             on_stage=lambda s: None, on_progress=lambda p: None,
                             on_resolved=lambda t, a: None, on_detail=lambda d: None,
-                            logger=None, only_tracks=None, patch_into=None):
-            calls.append({"only_tracks": only_tracks, "patch_into": patch_into})
+                            logger=None, only_tracks=None):
+            calls.append({"only_tracks": only_tracks})
             on_stage("searching")
             on_resolved("The Album", "Artist")
             on_stage("downloading")
             on_detail("track 2/2: Song")
             on_stage("moving")
-            destination = cfg.inbox / "Artist - The Album"
+            destination = cfg.music_root / "Artist - The Album"
             destination.mkdir(parents=True, exist_ok=True)
             failed = [] if only_tracks else [{"n": 3, "title": "Bad One", "reason": "nope"}]
             return AlbumGrabOutcome(
@@ -155,20 +155,18 @@ class TestGrab:
         assert finished["stage"] == "done"
         assert finished["title"] == "The Album"
         assert finished["detail"] == "delivered 2/3 tracks; failed: Bad One: nope"
-        assert finished["inbox_state"] == "waiting"
-        assert calls[0] == {"only_tracks": None, "patch_into": None}
+        assert finished["inbox_state"] == "filed"
+        assert calls[0] == {"only_tracks": None}
         import json as jsonlib
         assert jsonlib.loads(finished["failed_tracks"]) == [
             {"n": 3, "title": "Bad One", "reason": "nope"}]
 
-        # Retry of a done-with-gaps album targets only the failed tracks
-        # and patches into the delivered folder.
+        # Retry of a done-with-gaps album targets only the failed tracks.
         retried = client.post("/api/jobs/%s/retry" % job["id"]).json()
         assert retried["stage"] == "queued"
         recovered = wait_for_stage(client, job["id"])
         assert recovered["stage"] == "done"
         assert calls[1]["only_tracks"] == {3}
-        assert str(calls[1]["patch_into"]).endswith("Artist - The Album")
         assert recovered["detail"] == "retry recovered 1 of 1 failed tracks"
         assert recovered["failed_tracks"] == ""
 

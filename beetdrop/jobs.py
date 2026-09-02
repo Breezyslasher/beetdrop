@@ -12,10 +12,9 @@ import asyncio
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from typing import Callable, Optional
 
-from .config import Config, check_inbox
+from .config import Config, check_storage
 from .db import Store
 from .download import LogCollector
 from .events import Broadcaster
@@ -29,12 +28,7 @@ class JobCancelled(Exception):
     """Raised inside a worker when the user cancels the job; propagates
     out through yt-dlp's hooks and the pipeline's callbacks."""
 
-# Handoff watching: a delivered folder that leaves the inbox was picked up
-# by beets; one still sitting there after the grace period was not
-# auto-imported and likely needs review in beets-flask. This only ever
-# looks at the inbox - never at beets' database.
-INBOX_SWEEP_INTERVAL = 30
-INBOX_REVIEW_AFTER = 300  # seconds in the inbox before flagging for review
+MAINTENANCE_INTERVAL = 60  # seconds between history-pruning passes
 
 
 class JobManager:
@@ -69,36 +63,14 @@ class JobManager:
             self._sweep_task.cancel()
         self._executor.shutdown(wait=False, cancel_futures=True)
 
-    # -- handoff watching ------------------------------------------------------
-
     async def _sweep_loop(self) -> None:
         while True:
-            await asyncio.sleep(INBOX_SWEEP_INTERVAL)
+            await asyncio.sleep(MAINTENANCE_INTERVAL)
             try:
-                self.sweep_inbox()
                 config = self._config_provider()
                 self._store.prune(config.keep_jobs, config.keep_days)
             except Exception:
-                pass  # a failed sweep just means the next one tries again
-
-    def sweep_inbox(self, review_after: float = INBOX_REVIEW_AFTER) -> None:
-        """Update inbox_state for delivered jobs by looking at the inbox.
-
-        Folder gone -> beets picked it up. Folder still present past the
-        grace period -> flag it once for review in beets-flask.
-        """
-        for job in self._store.list_jobs(200):
-            if job["stage"] != "done" or not job["inbox_path"]:
-                continue
-            if job["inbox_state"] in ("filed", "unverified"):
-                continue  # library mode filed it; nothing watches these
-            if job["inbox_state"] == "picked_up":
-                continue
-            if not Path(job["inbox_path"]).exists():
-                self._update(job["id"], inbox_state="picked_up")
-            elif (job["inbox_state"] != "review"
-                    and time.time() - job["updated_at"] > review_after):
-                self._update(job["id"], inbox_state="review")
+                pass  # a failed pass just means the next one tries again
 
     def active_count(self) -> int:
         return sum(
@@ -144,9 +116,9 @@ class JobManager:
             return job
         if (job["stage"] == "done" and job["kind"] == "album"
                 and job["failed_tracks"]):
-            # Retry only the tracks that failed; failed_tracks and
-            # inbox_path stay so the run knows what to fetch and where
-            # to patch it in.
+            # Retry only the tracks that failed; failed_tracks stays so
+            # the run knows which track numbers to fetch. Recovered files
+            # join the existing album folder.
             job = self._update(job_id, stage="queued", progress=0.0,
                                error="", detail="", log="")
             self._executor.submit(self._run, job_id)
@@ -189,28 +161,20 @@ class JobManager:
             self._update(job_id, detail=text)
 
         def audio_state(verified: bool) -> str:
-            # Inbox mode hands to beets and waits; library mode files the
-            # audio itself - "filed" (or "unverified" under _review).
-            if config.mode == "library":
-                return "filed" if verified else "unverified"
-            return "waiting"
+            return "filed" if verified else "unverified"
 
         try:
-            check_inbox(config.audio_root(), config.min_free_mb)
+            check_storage(config.music_root, config.min_free_mb)
             if job["kind"] == "album":
                 only_tracks = None
-                patch_into = None
                 if job["failed_tracks"]:
                     # This run is a targeted retry of previously failed
-                    # tracks, patched into the delivered folder if it is
-                    # still in the inbox.
+                    # tracks; recovered files join the album folder.
                     try:
                         previous = json.loads(job["failed_tracks"])
                     except ValueError:
                         previous = []
                     only_tracks = {f.get("n") for f in previous if f.get("n")}
-                    if job["inbox_path"]:
-                        patch_into = Path(job["inbox_path"])
                 outcome = run_album_grab(
                     job["video_id"], config,
                     fmt=job["format"], bitrate=job["bitrate"],
@@ -220,7 +184,6 @@ class JobManager:
                     on_detail=on_detail,
                     logger=collector,
                     only_tracks=only_tracks,
-                    patch_into=patch_into,
                 )
                 if only_tracks is not None:
                     detail = "retry recovered %d of %d failed tracks" % (

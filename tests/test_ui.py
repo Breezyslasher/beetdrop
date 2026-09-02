@@ -14,7 +14,7 @@ def client(tmp_path):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     config = Config(
-        inbox=inbox,
+        music_root=inbox,
         scratch_root=tmp_path / "scratch",
         config_dir=tmp_path / "config",
     )

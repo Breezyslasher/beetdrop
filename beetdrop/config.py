@@ -24,20 +24,22 @@ def _env(name: str, default: str) -> str:
 SUPPORTED_FORMATS = ("opus", "m4a", "mp3")
 
 
-class InboxError(RuntimeError):
+class StorageError(RuntimeError):
     pass
+
+
+InboxError = StorageError  # legacy alias
 
 
 @dataclass
 class Config:
-    inbox: Path = field(default_factory=lambda: Path(os.environ.get("INBOX_PATH", "/inbox")))
     scratch_root: Path = field(default_factory=lambda: Path(_env("SCRATCH", "/tmp/beetdrop")))
     config_dir: Path = field(default_factory=lambda: Path(_env("CONFIG", "~/.config/beetdrop")).expanduser())
     output_format: str = field(default_factory=lambda: _env("FORMAT", "opus"))
     bitrate: str = field(default_factory=lambda: _env("BITRATE", "192"))
     cookies_file: str = field(default_factory=lambda: _env("COOKIES", ""))
     password: str = field(default_factory=lambda: _env("PASSWORD", ""))
-    # Refuse grabs when the inbox filesystem has less than this much free.
+    # Refuse grabs when the library filesystem has less than this much free.
     # Running out of disk mid-album otherwise surfaces as a confusing
     # ffmpeg/yt-dlp error after the download already happened.
     min_free_mb: int = field(default_factory=lambda: int(_env("MIN_FREE_MB", "512")))
@@ -50,15 +52,8 @@ class Config:
     # Job history retention: terminal jobs beyond both limits are pruned.
     keep_jobs: int = field(default_factory=lambda: int(_env("KEEP_JOBS", "200")))
     keep_days: int = field(default_factory=lambda: int(_env("KEEP_DAYS", "30")))
-    # "inbox": hand seed-tagged folders to a beets(-flask) inbox.
-    # "library": Beetdrop matches against MusicBrainz itself, writes full
-    # tags plus cover art, and files straight into music_root.
-    mode: str = field(default_factory=lambda: _env("MODE", "inbox"))
+    # The music library Beetdrop tags and files into.
     music_root: Path = field(default_factory=lambda: Path(os.environ.get("MUSIC_PATH", "/music")))
-
-    def audio_root(self) -> Path:
-        """Where finished audio goes in the active mode."""
-        return self.music_root if self.mode == "library" else self.inbox
 
     def track_delay_range(self) -> tuple:
         try:
@@ -84,30 +79,30 @@ class Config:
         return new
 
 
-def inbox_free_mb(inbox: Path) -> int:
+def storage_free_mb(root: Path) -> int:
     try:
-        return shutil.disk_usage(inbox).free // (1024 * 1024)
+        return shutil.disk_usage(root).free // (1024 * 1024)
     except OSError:
         return 0
 
 
-def inbox_problem(inbox: Path, min_free_mb: int = 0) -> str:
-    """Empty string when the inbox is usable, otherwise the reason it is not."""
-    if not inbox.is_dir():
-        return "inbox path does not exist or is not a directory: %s" % inbox
-    if not os.access(inbox, os.W_OK | os.X_OK):
-        return "inbox path is not writable by uid %d: %s" % (os.geteuid(), inbox)
+def storage_problem(root: Path, min_free_mb: int = 0) -> str:
+    """Empty string when the library root is usable, else the reason."""
+    if not root.is_dir():
+        return "music library path does not exist or is not a directory: %s" % root
+    if not os.access(root, os.W_OK | os.X_OK):
+        return "music library path is not writable by uid %d: %s" % (os.geteuid(), root)
     if min_free_mb > 0:
-        free = inbox_free_mb(inbox)
+        free = storage_free_mb(root)
         if free < min_free_mb:
-            return "inbox filesystem has %d MB free, below the %d MB minimum" % (free, min_free_mb)
+            return "library filesystem has %d MB free, below the %d MB minimum" % (free, min_free_mb)
     return ""
 
 
-def check_inbox(inbox: Path, min_free_mb: int = 0) -> None:
-    """Fail loudly if the inbox is missing, unwritable by the effective
+def check_storage(root: Path, min_free_mb: int = 0) -> None:
+    """Fail loudly if the library is missing, unwritable by the effective
     UID, or nearly out of disk. Any of these discovered after a download
     completes is a bad experience and an easily avoided one."""
-    problem = inbox_problem(inbox, min_free_mb)
+    problem = storage_problem(root, min_free_mb)
     if problem:
         raise InboxError(problem)

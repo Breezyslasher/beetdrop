@@ -1,296 +1,107 @@
 # Beetdrop
 
-A mobile-first web app: search for a song or album, download the audio
-from YouTube Music, and file it into your music library - either by
-handing seed-tagged folders to a beets(-flask) inbox, or fully
-standalone with Beetdrop doing the MusicBrainz matching, tagging, and
-filing itself.
-
-Formerly named Trackpull. The rename is backward compatible: legacy
-`TRACKPULL_*` environment variables and the `X-Trackpull-Password`
-header are still honored, and an existing trackpull.sqlite3 job
-database is migrated in place on first start. Update the image name to
-`ghcr.io/breezyslasher/beetdrop` and log in again (sessions reset).
-
-In inbox mode the line is the inbox: upstream of it is Beetdrop,
-downstream of it is beets, and beets stays the metadata authority. In
-library mode there is no beets - Beetdrop matches, tags, and files on
-its own.
-
-Current status: CLI, web API, web UI (PWA), and Docker image.
-
-## Filing modes
-
-Settings (or BEETDROP_MODE) picks one of two modes:
-
-- "inbox" (default): the original pipeline. Grabs get minimal seed tags
-  and land as one-folder-per-grab units in a beets(-flask) inbox; beets
-  is the metadata authority downstream.
-- "library" (standalone, no beets): each grab is matched against
-  MusicBrainz - duration-first recording scoring for singles, whole-
-  release matching with tracklist duration verification for albums.
-  Matched audio gets full Picard-compatible tags (artist, album, date,
-  track and disc numbers, MusicBrainz IDs), embedded cover art from the
-  Cover Art Archive (with the YouTube thumbnail as last resort), a
-  cover.jpg in the album folder, and is filed straight into the music
-  library as {albumartist}/{album} (year)/NN - title.ext. Grabs that
-  cannot be verified go under _review/ with YouTube-derived tags and an
-  unverified marker instead of polluting the clean library. Mount the
-  library at /music (MUSIC_PATH) and keep PUID/PGID matched to its
-  owner.
-
-MusicBrainz calls are rate limited to one per second process-wide and
-cached in SQLite for 30 days. Honest caveat versus beets: matching has
-no acoustic fingerprinting, so a wrong-video grab (a cover, a sped-up
-upload) can only be caught by duration and text similarity - watch the
-_review folder and the duration on cards.
+A mobile-first, self-hosted web app: search YouTube Music for a song or
+album, download the audio, match it against MusicBrainz, and file it -
+fully tagged, with cover art - straight into your music library.
+Standalone: no beets, no external tagger, one container.
 
 ## What a grab does
 
-1. Downloads bestaudio for the video into a scratch directory outside the
-   inbox and extracts to the target format (opus by default; m4a and mp3
-   offered; the stream is copied without re-encoding when the source codec
-   already matches).
-2. Verifies the file exists, is non-empty, and opens as valid audio.
-3. Writes seed tags from YouTube Music's structured search result: title,
-   artist, albumartist, album, and nothing else. No date, no genre, no
-   MBIDs, no cover art — a wrong guess here actively degrades beets'
-   matching, and beets will overwrite all of it anyway. Track number is
-   omitted rather than invented.
-4. Moves the whole per-grab folder (`<Artist> - <Title>`, sanitised, capped
-   at 200 bytes per segment) into the inbox with a single atomic rename, so
-   a watching beets-flask never observes a partially written folder.
-   Existing folders are never overwritten; collisions get a ` (2)` suffix.
+1. Downloads bestaudio (opus by default; m4a and mp3 offered; the
+   stream is copied without re-encoding when the source codec already
+   matches). No FLAC or WAV: the source tops out around 160 kbps Opus /
+   256 kbps AAC, and a lossless container would only misreport quality.
+2. Matches against MusicBrainz. Singles use duration-first recording
+   scoring - more than 8 seconds off is rejected outright, live/remix
+   qualifiers must agree on both sides, artist and title compare after
+   normalisation - plus release selection that prefers the earliest
+   official studio release over compilations and live albums. Albums
+   are matched as one release (title/artist/track-count scoring), then
+   the tracklists are aligned by album order and verified by durations.
+3. Writes full Picard-compatible tags: artist credits with joinphrases,
+   album, date, track and disc numbers with totals, and MusicBrainz
+   recording/release/release-group/artist IDs in the locations Picard
+   uses - so Plex, Navidrome, and Picard all agree with the files.
+4. Embeds cover art from the Cover Art Archive (release, then release
+   group, then the YouTube thumbnail as last resort) and writes
+   cover.jpg into the album folder.
+5. Files atomically into the library as
+   {albumartist}/{album} ({year})/{disc-}NN - {title}.{ext}, never
+   overwriting - collisions get a " (2)" suffix.
+
+Grabs that cannot be verified against MusicBrainz are filed under
+_review/ with YouTube-derived tags and an unverified marker, so the
+clean library never gets polluted silently. The queue shows which
+outcome each grab had.
+
+MusicBrainz calls are rate limited to one per second process-wide and
+cached in SQLite for 30 days. Honest caveat: there is no acoustic
+fingerprinting, so a wrong-video grab (a cover, a re-upload) can only
+be caught by duration and text similarity - watch the duration on the
+cards and the _review folder.
 
 ## Albums
 
-Search can be switched between songs and albums (UI toggle, `--albums`
-on the CLI, `type=albums` on the API). Grabbing an album downloads
-every playable track, seed-tags each with its track number (known from
-the album order, so it is written here unlike single grabs), names the
-files `NN - Title.ext`, and delivers the whole thing as ONE album
-folder in a single atomic rename - a complete album folder is beets'
-best import unit and matches full releases far better than singletons.
+Search toggles between songs and albums (UI, `--albums` on the CLI,
+`type=albums` on the API). Individual track failures do not abort an
+album: the rest is filed and the job records which tracks failed and
+why (including tracks YouTube Music serves without a videoId). Track
+numbering preserves gaps. An album that finished with gaps shows a
+"Retry failed tracks" button that re-downloads only the failures and
+slots them into the album folder.
 
-Individual track failures do not abort the album: the rest is
-delivered and the job records which tracks failed and why (including
-tracks YouTube Music serves without a videoId). Track numbering
-preserves gaps, so a missing track 5 does not shift track 6. Only an
-album with zero successful tracks fails.
+## Web UI and API
 
-An album that finished with gaps shows a "Retry failed tracks" button:
-the retry re-downloads only the tracks that failed. If the album folder
-is still in the inbox, recovered tracks are patched into it (one atomic
-replace per file, never overwriting), so beets sees one complete album
-before importing; if beets already took the folder, the recovered
-tracks are delivered as a new album folder and beets merges them into
-the same release on import. A retry that recovers nothing leaves the
-job done and the delivered folder untouched - permanently unavailable
-tracks stay listed so you know what is missing.
+`python -m beetdrop serve` (port 8090) serves a single-page PWA:
+search cards with prominent durations, a live queue (SSE) with cancel,
+retry, per-job logs, and progress, and a settings panel. Duplicate
+grabs are detected and confirmed before re-downloading. Passwords are
+stored hashed, sessions ride an HttpOnly cookie, failed logins are
+throttled (Cloudflare-tunnel aware), and yt-dlp can be updated live
+from Settings with no restart.
 
 ```
-python -m beetdrop search "artist album" --albums
-python -m beetdrop grab <browse_id> --album
+GET  /api/search?q=&type=songs|albums
+POST /api/grab                    {"video_id", "kind", "format", "force"}
+GET  /api/jobs                    POST /api/jobs/{id}/retry|cancel
+GET/PUT /api/settings             GET /api/health   GET /events (SSE)
+POST /api/login                   POST /api/ytdlp/update
 ```
 
-Success means the file was handed off to the inbox, not that it was
-imported — whether it imports is beets' decision.
-
-## Requirements
-
-- Python 3.12 (3.11 works)
-- ffmpeg on PATH
-
-```
-pip install -r requirements.txt
-```
-
-## Usage
-
-```
-export INBOX_PATH=/path/to/beets/inbox
-
-python -m beetdrop search "artist song title"
-python -m beetdrop grab <video_id> [--format opus|m4a|mp3] [--inbox PATH]
-python -m beetdrop serve [--host 0.0.0.0] [--port 8090]
-python -m beetdrop version
-```
-
-Environment variables: `INBOX_PATH`, `BEETDROP_FORMAT`,
-`BEETDROP_BITRATE` (mp3 only), `BEETDROP_COOKIES` (path to a cookies
-file for throttled or region-locked content), `BEETDROP_SCRATCH`,
-`BEETDROP_CONFIG` (state directory), `BEETDROP_PASSWORD`.
-
-## Web UI
-
-`serve` also serves a single-page UI at the root: search with result
-cards (thumbnail, title, artist, album, prominent duration so a live
-version or ten-minute extended mix is visible before grabbing), a queue
-bar showing the active-download count that expands into the full queue,
-and a settings panel (format, bitrate, inbox path, password, layout,
-read-only yt-dlp version). Job state streams in live over SSE and the
-queue survives page reloads.
-
-The layout setting switches between three modes: Auto (follows screen
-size), Mobile (search field and primary action in the lower half of the
-screen for one-handed phone use), and Desktop (the same page in a
-max-width container with the search bar at the top). The choice is
-stored in the browser.
-
-The page is installable as a PWA (standalone display, maskable icons);
-a minimal service worker caches the shell only, never API responses.
-Vue 3 is vendored as a single file - no build step, no CDN dependency
-at runtime, so the app works on a LAN without internet access.
-
-## Wiring beets-flask
-
-beets-flask ships with a placeholder inbox ("/music/dummy"); until it
-is replaced, it reports "Path /music/dummy does not exist or is no
-directory". In beets-flask's beets config.yaml, point an inbox folder
-at the same host directory Beetdrop writes to, as mounted inside the
-beets-flask container:
-
-```
-directory: /music/library
-
-gui:
-  inbox:
-    folders:
-      beetdrop:
-        name: "Beetdrop inbox"
-        path: /music/inbox
-        autotag: preview
-```
-
-The container-side paths do not need to match Beetdrop's /inbox; both
-containers just have to mount the same host folder. Keep PUID/PGID
-consistent between the two containers so beets can move what Beetdrop
-writes.
-
-## Handoff watching
-
-After a grab lands, Beetdrop keeps an eye on the folder it delivered -
-watching the inbox only, never beets' database. When the folder leaves
-the inbox the job shows "Picked up by beets". If it is still sitting
-there after a grace period (5 minutes), the job is flagged "Not
-auto-imported - review it in beets-flask" and the UI shows a
-notification, since that usually means the match fell below the
-auto-import threshold and is waiting in beets-flask for review. This is
-a heuristic: a folder can also leave the inbox because it was deleted
-by hand, and with auto-import disabled every grab will flag for review
-once the grace period passes.
-
-## Web API
-
-`serve` runs the FastAPI app:
-
-```
-GET  /api/search?q=&limit=        songs search, normalised results
-POST /api/grab                    {"video_id": ..., "format": ..., "bitrate": ...}
-GET  /api/jobs                    recent jobs from SQLite
-POST /api/jobs/{id}/retry         re-run a failed job
-GET  /api/settings                includes read-only yt-dlp version
-PUT  /api/settings                output_format, bitrate, inbox, password
-GET  /api/health                  inbox writability, yt-dlp version
-GET  /events                      SSE stream of job state changes
-```
-
-Downloads run in a background worker capped at two concurrent grabs;
-searches run separately and never wait behind a download. Job state
-persists in SQLite, so the queue survives restarts (jobs that were
-mid-flight when the process died are marked failed and can be retried).
-Stages: queued, searching, downloading, extracting, tagging, moving,
-done, failed.
-
-Auth is an optional single shared password (set via settings or
-`BEETDROP_PASSWORD`), hardened enough to sit behind a Cloudflare
-tunnel or other internet-facing proxy:
-
-- The password is stored as a salted PBKDF2 hash, never plaintext (a
-  plaintext password stored by an earlier version is hashed in place on
-  startup), and every comparison is constant-time.
-- Browsers log in once via `POST /api/login` and hold a signed HttpOnly
-  session cookie for 30 days; the password is never kept in the browser
-  and never appears in a query string (query strings end up in access
-  logs - the old `?password=` parameter is gone). Changing the password
-  invalidates every session.
-- Scripts and curl use the `X-Beetdrop-Password` header.
-- Failed attempts are throttled per client (5 in 15 minutes, keyed by
-  `CF-Connecting-IP` behind Cloudflare), after which logins answer 429.
-- All responses carry nosniff/frame-deny/no-referrer headers, and shell
-  assets are served `no-cache` so a stale cached app.js can never be
-  mixed with fresh HTML.
-
-`/api/health` stays open so container healthchecks work. TLS is the
-tunnel or reverse proxy's job.
-
-## Operations
-
-- Jobs still queued when the process restarts simply run on startup;
-  only jobs that were mid-download are marked failed (retryable).
-- Grabs are refused up front when the inbox filesystem has less than
-  `BEETDROP_MIN_FREE_MB` (default 512) free, and /api/health reports
-  the free space - running out of disk mid-album otherwise surfaces as
-  a confusing error after the download already happened.
-- /api/health reports failures_last_hour; a wave of failures usually
-  means YouTube changed something and yt-dlp needs updating. Settings
-  has an "Update yt-dlp" button (POST /api/ytdlp/update): the update
-  installs into /config/yt-dlp (the server runs unprivileged and
-  cannot touch the system copy) and is hot-swapped into the running
-  process - active for the very next grab, no restart, and it
-  persists across restarts. A rebuilt image that bundles a newer
-  yt-dlp than the persisted copy takes precedence automatically.
-- Failed jobs keep the last lines of yt-dlp output, shown as an
-  expandable log in the queue.
-- The format picker next to the search field overrides the output
-  format for individual grabs without touching the saved setting.
-- Queued and running jobs have a Cancel button; a running job stops at
-  its next progress update. Cancelled jobs can be retried.
-- Grabbing something already grabbed (or currently in flight) answers
-  409 with the existing job; the UI asks before grabbing again, and the
-  API takes force: true to override.
-- Terminal jobs are pruned once they are BOTH older than
-  BEETDROP_KEEP_DAYS (default 30) and beyond the newest
-  BEETDROP_KEEP_JOBS (default 200).
-- Album tracks download with a randomized pause between them
-  (BEETDROP_TRACK_DELAY, default "2-5" seconds) - back-to-back
-  downloads look bot-like to YouTube's throttling.
-- Cookies for throttled or region-locked videos can be pasted straight
-  into Settings (stored as a file in /config, mode 600); an uploaded
-  cookie file wins over the BEETDROP_COOKIES mount. Clearing removes
-  the file.
-- Concurrent download workers are settable 1-4 (Settings or
-  BEETDROP_CONCURRENCY, default 2); the change applies on the next
-  container restart.
-
-FLAC and WAV are not offered: YouTube Music's source ceiling is roughly
-160 kbps Opus or 256 kbps AAC, so a lossless container would be a larger
-file carrying no additional information and would make the library
-misreport its own quality.
-
-## Docker
+## Running it
 
 ```
 docker compose up -d
 ```
 
-See docker-compose.yml for the volume and PUID/PGID wiring; the inbox
-volume must resolve to the same path beets-flask watches. The image is
-published to GitHub Container Registry as
-`ghcr.io/breezyslasher/beetdrop` (latest and per-version tags) by the
-publish-docker workflow on every push to main that touches the app or
-the Dockerfile. Set `BEETDROP_SELFUPDATE=1` to refresh yt-dlp at
-container start; the resolved version is always visible in
-/api/settings and /api/health.
+See docker-compose.yml: mount /config (state) and /music (your
+library), set PUID/PGID to the library owner. Environment variables:
+`MUSIC_PATH`, `BEETDROP_CONFIG`, `BEETDROP_FORMAT`, `BEETDROP_BITRATE`,
+`BEETDROP_PASSWORD`, `BEETDROP_COOKIES`, `BEETDROP_CONCURRENCY` (1-4),
+`BEETDROP_TRACK_DELAY`, `BEETDROP_MIN_FREE_MB`, `BEETDROP_KEEP_JOBS`,
+`BEETDROP_KEEP_DAYS`, `BEETDROP_SCRATCH`. Legacy `TRACKPULL_*` names
+are still honored.
+
+CLI:
+
+```
+python -m beetdrop search "artist song" [--albums]
+python -m beetdrop grab <video_id> [--album] [--format opus|m4a|mp3] [--library PATH]
+python -m beetdrop serve [--host 0.0.0.0] [--port 8090]
+```
+
+History: this project previously fed a beets/beets-flask inbox
+("Trackpull", then Beetdrop inbox mode). That pipeline was removed in
+0.11.0 - the last inbox-capable image is 0.10.x.
 
 ## Tests
 
 ```
-pip install -r requirements-dev.txt
+pip install -r requirements.txt -r requirements-dev.txt
 python -m pytest tests/
 ```
 
 ## Legal note
 
-The tool downloads audio from YouTube. Users are responsible for ensuring
-their use complies with applicable law and platform terms.
+The tool downloads audio from YouTube. Users are responsible for
+ensuring their use complies with applicable law and platform terms.

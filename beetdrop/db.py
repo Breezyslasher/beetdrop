@@ -29,16 +29,14 @@ JOB_COLUMNS = (
 # text ("track 3/12: Title") and, when some tracks fail, the delivered
 # count.
 
-# inbox_state tracks what happened after the handoff, by watching the
-# inbox only (never beets' database): "" (not applicable yet),
-# "waiting" (folder handed off, still in the inbox), "picked_up" (folder
-# left the inbox - beets took it), "review" (still in the inbox past the
-# grace period - the match likely needs review in beets-flask).
+# inbox_state (column name kept for database compatibility) records the
+# filing outcome: "" (not finished), "filed" (verified and in the
+# library), "unverified" (no MusicBrainz match; filed under _review).
 
 # Settings the API may read and write. yt-dlp version is reported
 # read-only by the settings endpoint and lives nowhere.
-SETTING_KEYS = ("output_format", "bitrate", "inbox", "password", "concurrency",
-                "mode", "music_root")
+SETTING_KEYS = ("output_format", "bitrate", "password", "concurrency",
+                "music_root")
 
 
 class Store:

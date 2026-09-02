@@ -1,8 +1,8 @@
 """Beetdrop: search for a song or album, download the audio from YouTube
-Music, and file it into a music library - via a beets(-flask) inbox
-(inbox mode), or standalone with Beetdrop doing the MusicBrainz
-matching, tagging, cover art, and filing itself (library mode).
+Music, match it against MusicBrainz, and file it fully tagged - with
+cover art - straight into a music library. Standalone: no beets, no
+external tagger.
 """
 
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 APP_NAME = "beetdrop"

@@ -1,8 +1,8 @@
 # Beetdrop
 #
-# The /inbox volume must resolve to the same folder beets-flask watches;
-# both containers see the same path. Set PUID/PGID to the user that owns
-# that share so beets and the host can read what Beetdrop writes.
+# Standalone: Beetdrop searches YouTube Music, matches grabs against
+# MusicBrainz, writes full tags plus cover art, and files straight into
+# the music library. No beets, no inbox.
 #
 #   docker compose up -d
 #   docker compose logs -f beetdrop
@@ -14,45 +14,32 @@ services:
     restart: unless-stopped
 
     ports:
-      # host:container. If the host port is already allocated ("Bind for
-      # 0.0.0.0:8090 failed"), change only the left side, e.g. "8091:8090",
-      # and browse to that port instead. The container side stays 8090.
+      # host:container. If the host port is already allocated, change only
+      # the left side, e.g. "8091:8090".
       - "8090:8090"
 
     volumes:
-      # Persistent state: settings, job history (SQLite)
+      # Persistent state: settings, job history, MusicBrainz cache,
+      # uploaded cookies, yt-dlp updates
       - ./config:/config
-      # beets-flask inbox - point this at the SAME host folder beets-flask
-      # watches, e.g. /srv/dev-disk-by-uuid-XXXX/Media/inbox
-      - ./inbox:/inbox
-      # Library mode: mount your music library and set the filing mode to
-      # "library" in Settings - Beetdrop then tags via MusicBrainz and
-      # files straight here, no beets needed.
-      # - /srv/dev-disk-by-uuid-XXXX/Media/Music/explo:/music
-      # Optional: cookies for throttled or region-locked content
-      # - ./config/cookies.txt:/config/cookies.txt:ro
+      # Your music library - fully tagged files land here as
+      # Artist/Album (Year)/NN - Title.ext; unmatched grabs under _review/
+      - ./music:/music
 
     environment:
-      # User/group that owns the inbox share
+      # User/group that owns the music library
       - PUID=1000
       - PGID=1000
       - TZ=America/New_York
-      - INBOX_PATH=/inbox
 
-      # Optional: refresh yt-dlp on every container start. Worth enabling
-      # when grabs start failing en masse after a YouTube change.
-      # - BEETDROP_SELFUPDATE=1
+      # Optional: single shared password for the API/UI (recommended
+      # before exposing through a tunnel or reverse proxy)
+      # - BEETDROP_PASSWORD=changeme
 
       # Optional: default output format (opus, m4a, mp3) and mp3 bitrate;
       # both can also be changed at runtime in Settings.
       # - BEETDROP_FORMAT=opus
       # - BEETDROP_BITRATE=192
-
-      # Optional: single shared password for the API/UI
-      # - BEETDROP_PASSWORD=changeme
-
-      # Optional: cookies file (mount it above as well)
-      # - BEETDROP_COOKIES=/config/cookies.txt
 
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/api/health', timeout=4)"]
