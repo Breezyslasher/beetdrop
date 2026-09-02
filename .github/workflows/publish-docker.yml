@@ -79,7 +79,7 @@ jobs:
             type=sha
           labels: |
             org.opencontainers.image.title=Beetdrop
-            org.opencontainers.image.description=Search YouTube Music and drop seed-tagged audio into a beets-flask inbox
+            org.opencontainers.image.description=Search YouTube Music, match on MusicBrainz, and file tagged audio into your library
 
       - name: Build amd64 image for smoke test
         uses: docker/build-push-action@v6
@@ -93,9 +93,9 @@ jobs:
 
       - name: Smoke test the image
         run: |
-          mkdir -p "$RUNNER_TEMP/inbox"
+          mkdir -p "$RUNNER_TEMP/music"
           docker run -d --name beetdrop-smoke -p 8090:8090 \
-            -v "$RUNNER_TEMP/inbox:/inbox" \
+            -v "$RUNNER_TEMP/music:/music" \
             -e PUID=$(id -u) -e PGID=$(id -g) \
             beetdrop:smoke
           for i in $(seq 1 30); do
@@ -106,7 +106,7 @@ jobs:
           done
           cat health.json
           grep -q '"status": *"ok"' health.json || { docker logs beetdrop-smoke; exit 1; }
-          grep -q '"inbox_writable": *true' health.json || { docker logs beetdrop-smoke; exit 1; }
+          grep -q '"library_writable": *true' health.json || { docker logs beetdrop-smoke; exit 1; }
           docker rm -f beetdrop-smoke
 
       - name: Build and push multi-arch
