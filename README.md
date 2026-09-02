@@ -28,10 +28,14 @@ Standalone: no beets, no external tagger, one container.
 5. Files atomically into the library as
    {albumartist}/{album} ({year})/{disc-}NN - {title}.{ext}, never
    overwriting - collisions get a " (2)" suffix.
-6. Fetches synced (timed) lyrics from LRCLIB and writes a .lrc sidecar
-   next to the track - the format Plex, Navidrome, and most players read
-   for synced lyrics. Timed only: results with only plain text are
-   skipped. Best effort, and toggleable in Settings (or BEETDROP_LYRICS).
+6. Fetches synced (timed) lyrics and writes a .lrc sidecar next to the
+   track - the format Plex, Navidrome, and most players read for synced
+   lyrics. Two sources: LRCLIB and Musixmatch. Settings picks the primary
+   provider (the other is the fallback); whichever returns timed lyrics
+   first wins. Timed only: results with only plain text are skipped.
+   Musixmatch needs a session token - fetch the latest one with a button
+   in Settings (same as updating yt-dlp), or paste your own. Best effort,
+   and toggleable in Settings (or BEETDROP_LYRICS).
 
 Grabs that cannot be verified against MusicBrainz are filed under
 _review/ with YouTube-derived tags and an unverified marker, so the
@@ -70,6 +74,7 @@ POST /api/grab                    {"video_id", "kind", "format", "force"}
 GET  /api/jobs                    POST /api/jobs/{id}/retry|cancel
 GET/PUT /api/settings             GET /api/health   GET /events (SSE)
 POST /api/login                   POST /api/ytdlp/update
+POST /api/lyrics/musixmatch-token
 ```
 
 ## Running it
@@ -82,9 +87,10 @@ See docker-compose.yml: mount /config (state) and /music (your
 library), set PUID/PGID to the library owner. Environment variables:
 `MUSIC_PATH`, `BEETDROP_CONFIG`, `BEETDROP_FORMAT`, `BEETDROP_BITRATE`,
 `BEETDROP_PASSWORD`, `BEETDROP_COOKIES`, `BEETDROP_CONCURRENCY` (1-4),
-`BEETDROP_LYRICS`, `BEETDROP_TRACK_DELAY`, `BEETDROP_MIN_FREE_MB`, `BEETDROP_KEEP_JOBS`,
-`BEETDROP_KEEP_DAYS`, `BEETDROP_SCRATCH`. Legacy `TRACKPULL_*` names
-are still honored.
+`BEETDROP_LYRICS`, `BEETDROP_LYRICS_PROVIDER` (lrclib|musixmatch),
+`BEETDROP_MXM_TOKEN` (Musixmatch token), `BEETDROP_TRACK_DELAY`,
+`BEETDROP_MIN_FREE_MB`, `BEETDROP_KEEP_JOBS`, `BEETDROP_KEEP_DAYS`,
+`BEETDROP_SCRATCH`. Legacy `TRACKPULL_*` names are still honored.
 
 CLI:
 

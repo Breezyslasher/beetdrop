@@ -41,6 +41,12 @@ services:
       # - BEETDROP_FORMAT=opus
       # - BEETDROP_BITRATE=192
 
+      # Optional: synced (timed) lyrics. Toggle, primary source, and the
+      # Musixmatch token can all be set at runtime in Settings instead.
+      # - BEETDROP_LYRICS=1
+      # - BEETDROP_LYRICS_PROVIDER=lrclib   # or musixmatch
+      # - BEETDROP_MXM_TOKEN=
+
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/api/health', timeout=4)"]
       interval: 30s

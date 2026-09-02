@@ -183,6 +183,21 @@
         Synced lyrics (writes a .lrc sidecar from LRCLIB when timed
         lyrics exist)
       </label>
+      <label>Primary lyrics source
+        <select v-model="draft.lyrics_provider">
+          <option value="lrclib">LRCLIB (free, no token)</option>
+          <option value="musixmatch">Musixmatch (needs token)</option>
+        </select>
+      </label>
+      <p class="note">
+        The other source is the fallback. Musixmatch needs a usertoken
+        that rotates -
+        <template v-if="settings && settings.musixmatch_token_set">a token is set.</template>
+        <template v-else>no token set; fetch one.</template>
+      </p>
+      <button type="button" @click="fetchMxmToken" :disabled="fetchingToken">
+        {{ fetchingToken ? 'Fetching token...' : 'Fetch Musixmatch token' }}
+      </button>
 
       <label>Concurrent downloads
         <select v-model="draft.concurrency">

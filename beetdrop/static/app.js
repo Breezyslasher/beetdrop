@@ -19,6 +19,7 @@ createApp({
       searched: false,
       grabbing: {},
       updatingYtdlp: false,
+      fetchingToken: false,
 
       jobs: [],
       queueOpen: false,
@@ -232,7 +233,10 @@ createApp({
           output_format: this.settings.output_format,
           bitrate: this.settings.bitrate,
           concurrency: this.settings.concurrency,
-          lyrics: this.settings.lyrics,
+          // Default-on unless the server explicitly says off, so a
+          // partial/stale settings object never silently flips it.
+          lyrics: this.settings.lyrics !== false,
+          lyrics_provider: this.settings.lyrics_provider || "lrclib",
           cookies: "",
           new_password: "",
         };
@@ -249,6 +253,7 @@ createApp({
         bitrate: this.draft.bitrate,
         concurrency: Number(this.draft.concurrency) || undefined,
         lyrics: !!this.draft.lyrics,
+        lyrics_provider: this.draft.lyrics_provider,
       };
       // Only send the library path when it is editable (not env-locked).
       if (this.settings && !this.settings.music_root_locked) {
@@ -291,6 +296,19 @@ createApp({
         this.showToast("Cookies cleared");
       } catch (err) {
         if (err.message !== "password required") this.showToast("Clear failed: " + err.message);
+      }
+    },
+
+    async fetchMxmToken() {
+      this.fetchingToken = true;
+      try {
+        await this.api("/api/lyrics/musixmatch-token", { method: "POST" });
+        this.settings = await this.api("/api/settings");
+        this.showToast("Musixmatch token saved");
+      } catch (err) {
+        if (err.message !== "password required") this.showToast("Token fetch failed: " + err.message);
+      } finally {
+        this.fetchingToken = false;
       }
     },
 
