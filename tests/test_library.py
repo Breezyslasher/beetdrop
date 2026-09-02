@@ -192,3 +192,57 @@ class TestFullTagRoundtrip:
         blob = str(dict(raw.tags or {})) + str(getattr(raw.tags, "keys", lambda: [])())
         assert "11111111-1111-1111-1111-111111111111" in str(raw.tags.pprint()
             if hasattr(raw.tags, "pprint") else dict(raw.tags))
+
+
+class TestSingleGrabResolves:
+    """Regression: run_grab must call resolve_track with the primary
+    artist. A single grab crashed with 'Result has no attribute
+    primary_artist' before the property existed."""
+
+    def test_run_grab_files_matched_track(self, tmp_path, monkeypatch):
+        import beetdrop.grab as grab_module
+        from beetdrop.config import Config
+        from beetdrop.library import TrackResolution
+        from beetdrop.search import Result
+
+        music = tmp_path / "music"
+        music.mkdir()
+        config = Config(music_root=music, scratch_root=tmp_path / "s",
+                        config_dir=tmp_path / "c")
+
+        captured = {}
+
+        def fake_download(video_id, scratch_dir, fmt="opus", **kwargs):
+            scratch_dir.mkdir(parents=True, exist_ok=True)
+            p = scratch_dir / ("%s.%s" % (video_id, fmt))
+            p.write_bytes(b"x")
+            return p
+
+        def fake_resolve(mb, title, artist, duration):
+            captured["artist"] = artist
+            return TrackResolution(
+                tags=FullTags(title=title, artist=artist, album_artist=artist,
+                              album="Album", date="1999", track_number=1,
+                              recording_mbid="rec-1"),
+                matched=True)
+
+        class FakeMB:
+            def fetch_cover(self, **k):
+                return None
+
+        monkeypatch.setattr(grab_module, "download_audio", fake_download)
+        monkeypatch.setattr(grab_module, "verify_audio", lambda p: None)
+        monkeypatch.setattr(grab_module, "write_full_tags",
+                            lambda p, t, c=None, m="image/jpeg": None)
+        monkeypatch.setattr(grab_module, "get_mb_client", lambda c: FakeMB())
+        monkeypatch.setattr(grab_module, "resolve_track", fake_resolve)
+        monkeypatch.setattr(grab_module, "lookup_video",
+                            lambda v: Result(video_id=v, title="Song",
+                                             raw_title="Song",
+                                             artists=["First", "Second"],
+                                             duration_seconds=200))
+
+        outcome = grab_module.run_grab("vid", config)
+        assert outcome.verified
+        # The FIRST artist is what matching received, not the joined list.
+        assert captured["artist"] == "First"

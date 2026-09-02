@@ -30,6 +30,12 @@ class Result:
     def artist_display(self) -> str:
         return ", ".join(self.artists)
 
+    @property
+    def primary_artist(self) -> str:
+        # The first credited artist - the right input for MusicBrainz
+        # matching (better than the comma-joined display string).
+        return self.artists[0] if self.artists else ""
+
 
 @dataclass
 class AlbumResult:
