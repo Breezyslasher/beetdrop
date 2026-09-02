@@ -36,7 +36,7 @@ JOB_COLUMNS = (
 # Settings the API may read and write. yt-dlp version is reported
 # read-only by the settings endpoint and lives nowhere.
 SETTING_KEYS = ("output_format", "bitrate", "password", "concurrency",
-                "music_root", "lyrics")
+                "music_root", "lyrics", "mxm_token", "lyrics_provider")
 
 
 class Store:

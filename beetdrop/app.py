@@ -31,7 +31,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, updater
+from . import __version__, musixmatch, updater
 from .auth import (
     LoginThrottle,
     check_session_token,
@@ -68,6 +68,8 @@ class SettingsUpdate(BaseModel):
     cookies: Optional[str] = None  # cookies.txt content; "" clears
     music_root: Optional[str] = None
     lyrics: Optional[bool] = None
+    lyrics_provider: Optional[str] = None  # "lrclib" | "musixmatch"
+    musixmatch_token: Optional[str] = None  # "" clears
 
 
 class LoginRequest(BaseModel):
@@ -108,6 +110,10 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             config.music_root = Path(stored["music_root"])
         if stored.get("lyrics") in ("0", "1"):
             config.lyrics_enabled = stored["lyrics"] == "1"
+        if stored.get("mxm_token"):
+            config.musixmatch_token = stored["mxm_token"]
+        if stored.get("lyrics_provider") in ("lrclib", "musixmatch"):
+            config.lyrics_provider = stored["lyrics_provider"]
         # Cookies uploaded through Settings win over the mounted file.
         if uploaded_cookies.is_file() and uploaded_cookies.stat().st_size > 0:
             config.cookies_file = str(uploaded_cookies)
@@ -283,6 +289,8 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             "music_root": str(config.music_root),
             "music_root_locked": music_locked,  # env-controlled; hide field
             "lyrics": config.lyrics_enabled,
+            "lyrics_provider": config.lyrics_provider,
+            "musixmatch_token_set": bool(config.musixmatch_token),
             "ytdlp_version": ytdlp_version(),  # read-only
         }
 
@@ -305,10 +313,14 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
                 uploaded_cookies.write_text(body.cookies)
             elif uploaded_cookies.exists():
                 uploaded_cookies.unlink()
+        if body.lyrics_provider is not None and body.lyrics_provider not in ("lrclib", "musixmatch"):
+            raise HTTPException(status_code=422, detail="lyrics_provider must be lrclib or musixmatch")
         updates = {k: v for k, v in body.model_dump().items()
-                   if v is not None and k != "cookies"}
+                   if v is not None and k not in ("cookies", "musixmatch_token")}
         if "lyrics" in updates:
             updates["lyrics"] = "1" if updates["lyrics"] else "0"
+        if body.musixmatch_token is not None:
+            updates["mxm_token"] = body.musixmatch_token.strip()
         if updates.get("password"):
             # Hashed at rest; changing it also invalidates every session,
             # since the hash is part of the token signing key.
@@ -351,6 +363,18 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             "active": True,
             "restart_needed": False,
         }
+
+    @app.post("/api/lyrics/musixmatch-token", dependencies=[protected])
+    async def api_musixmatch_token():
+        """Fetch a fresh Musixmatch usertoken and store it - the
+        synced-lyrics fallback then works immediately and persists.
+        Same shape as the yt-dlp update button."""
+        try:
+            token = await asyncio.to_thread(musixmatch.fetch_token)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+        store.set_settings({"mxm_token": token})
+        return {"ok": True, "token_set": True}
 
     @app.get("/events", dependencies=[protected])
     async def events(request: Request):

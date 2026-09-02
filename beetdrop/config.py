@@ -56,6 +56,11 @@ class Config:
     music_root: Path = field(default_factory=lambda: Path(os.environ.get("MUSIC_PATH", "/music")))
     # Fetch synced (timed) lyrics from LRCLIB and write a .lrc sidecar.
     lyrics_enabled: bool = field(default_factory=lambda: _env("LYRICS", "1") not in ("0", "false", "no", ""))
+    # Primary synced-lyrics source: "lrclib" (default, free, no token) or
+    # "musixmatch" (best coverage, needs a rotating usertoken). Whichever
+    # is not primary is used as the fallback.
+    lyrics_provider: str = field(default_factory=lambda: _env("LYRICS_PROVIDER", "lrclib"))
+    musixmatch_token: str = field(default_factory=lambda: _env("MXM_TOKEN", ""))
 
     def track_delay_range(self) -> tuple:
         try:
