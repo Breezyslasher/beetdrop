@@ -647,6 +647,23 @@
         </button>
       </div>
     </details>
+    <details class="explain">
+      <summary>No image beside them and no YouTube link?</summary>
+      <p class="note">
+        Beetdrop can search YouTube for each by its name &mdash; without the
+        "07 - " in front &mdash; and use the thumbnail only when a result's
+        title says the same thing <em>and</em> its length matches the
+        file's to a couple of seconds. Anything less certain is skipped and
+        listed in the job's log with the closest result, so nothing gets
+        the wrong picture. One search a second, so about ten minutes for
+        six hundred videos. WebM/MKV named .mp4 are converted first.
+      </p>
+      <div class="jobactions">
+        <button type="button" @click="embedVideoArt(true, true)" :disabled="embeddingArt">
+          Search YouTube for them, then embed artwork
+        </button>
+      </div>
+    </details>
 
     <h3>Lyrics</h3>
     <div class="jobactions">

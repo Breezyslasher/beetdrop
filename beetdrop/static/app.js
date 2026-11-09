@@ -399,8 +399,15 @@ const app = createApp({
       }
     },
 
-    async embedVideoArt(convert) {
-      if (convert && !window.confirm(
+    async embedVideoArt(convert, search) {
+      if (search && !window.confirm(
+          "Search YouTube for every music video with no artwork source?\n\n"
+          + "A thumbnail is used only when the title and length both match. "
+          + "WebM/MKV named .mp4 are converted to real MP4 first (nothing "
+          + "re-encoded, subtitles inside dropped). One search a second.")) {
+        return;
+      }
+      if (convert && !search && !window.confirm(
           "Convert every WebM/MKV music video named .mp4 into a real MP4?\n\n"
           + "Nothing is re-encoded and the names stay the same, but the "
           + "files are rewritten and any subtitles inside them are dropped.")) {
@@ -408,7 +415,9 @@ const app = createApp({
       }
       this.embeddingArt = true;
       try {
-        await this.api("/api/videos/embed-art" + (convert ? "?convert=true" : ""),
+        const options = [convert ? "convert=true" : "", search ? "search=true" : ""]
+          .filter(Boolean).join("&");
+        await this.api("/api/videos/embed-art" + (options ? "?" + options : ""),
                        { method: "POST" });
         this.showToast("Embedding artwork - progress is on the Queue");
       } catch (err) {
