@@ -210,18 +210,22 @@ so a server shared with you is listed but greyed out. **Sign out of
 Plex** forgets the address and token and keeps the folder mapping. The
 address and token can still be typed in by hand.
 
-Beetdrop and Plex usually see the same files at different paths - `/music`
-here, `/data/music` in Plex's container. "Where Plex sees the music
-folder" maps one onto the other; **Save and test Plex** lists every
-folder Plex knows about, so the right value can be copied rather than
-guessed. When the mapping is missing or wrong, the music libraries'
-folders are offered as buttons, and the likely one comes first:
-inside a container Beetdrop can read which folder of the host's disk
-is mounted as `/music` (`/proc/self/mountinfo`), and picks out the Plex
-folder that ends the same way. A folder that is in more than one
-library - one "Both" folder in two people's music libraries - is
-scanned into each. The token is stored on the server like the Apple token and never
-sent back to the page.
+**Library to scan** lists Plex's libraries once it is connected. Left
+on *Automatic*, every library holding the music folder is scanned - a
+folder in two libraries, like one "Both" folder in two people's music
+libraries, is scanned into each. Pick one and only that one is.
+
+Beetdrop and Plex usually see the same files at different paths -
+`/music` here, `/srv/.../Media/Music/explo` on the NAS. To scan just the
+folder a grab landed in, Beetdrop needs to know which; it usually works
+it out alone: in a container it reads which folder of the host's disk
+is mounted as `/music` (`/proc/self/mountinfo`) and picks the Plex
+folder ending the same way. "Where Plex sees the music folder" is only
+for when that guess is wrong or impossible. With a library picked and
+no folder known, each grab rescans that whole library instead - slower,
+since Plex walks every folder, though it skips files it already has.
+The token is stored on the server like the Apple token and never sent
+back to the page.
 
 Requests follow Plex's published OpenAPI description: `GET
 /library/sections/all` to find the library, `POST
@@ -233,7 +237,8 @@ It is best effort: a Plex that is off or unreachable is noted on the job
 card and never fails a grab. One Plex refusal worth knowing: a server
 signed out of plex.tv will not refresh a music library, and the job card
 says so rather than reporting a bare HTTP 503. Env: `BEETDROP_PLEX_URL`,
-`BEETDROP_PLEX_TOKEN`, `BEETDROP_PLEX_MUSIC_PATH`.
+`BEETDROP_PLEX_TOKEN`, `BEETDROP_PLEX_MUSIC_PATH`,
+`BEETDROP_PLEX_SECTION` (a library key).
 
 ## Fixing a wrong match
 

@@ -68,6 +68,9 @@ def apply_stored_settings(base: Config, stored: dict,
     if "plex_music_path" in stored:
         # Clearable: blank means Plex sees the library where we do.
         config.plex_music_path = stored["plex_music_path"]
+    if "plex_section" in stored:
+        # Clearable: blank goes back to every library holding the folder.
+        config.plex_section = stored["plex_section"]
     if stored.get("video_root") and not video_locked:
         config.video_root = Path(stored["video_root"])
     if stored.get("video_max_height"):

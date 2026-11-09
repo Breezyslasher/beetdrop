@@ -88,6 +88,9 @@ class Config:
     # Where Plex sees the music library, when its mount differs from ours
     # (/data/music there, /music here). Blank means the same path.
     plex_music_path: str = field(default_factory=lambda: _env("PLEX_MUSIC_PATH", ""))
+    # The library to scan, by Plex's key. Blank: every library holding
+    # the folder.
+    plex_section: str = field(default_factory=lambda: _env("PLEX_SECTION", ""))
 
     def __post_init__(self):
         # A blank video_root lives beside the music library so a single

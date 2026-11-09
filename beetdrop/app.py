@@ -86,6 +86,7 @@ class SettingsUpdate(BaseModel):
     plex_url: Optional[str] = None
     plex_token: Optional[str] = None  # "" clears; never sent back
     plex_music_path: Optional[str] = None
+    plex_section: Optional[str] = None  # "" = automatic
 
 
 class LoginRequest(BaseModel):
@@ -357,6 +358,7 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             # is the whole account, and the page never needs to read it.
             "plex_token_set": bool(config.plex_token),
             "plex_music_path": config.plex_music_path,
+            "plex_section": config.plex_section,
             "apple_storefront": config.apple_storefront,
             "word_lyrics": config.word_lyrics,
             "video_root": str(config.video_root),
@@ -415,6 +417,8 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             updates["plex_url"] = url
         if body.plex_music_path is not None:
             updates["plex_music_path"] = body.plex_music_path.strip()
+        if body.plex_section is not None:
+            updates["plex_section"] = body.plex_section.strip()
         if "lyrics" in updates:
             updates["lyrics"] = "1" if updates["lyrics"] else "0"
         if body.musixmatch_token is not None:
@@ -592,7 +596,8 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
                 plex_signin.choose, pin_id, body.server_id, plex_client_id())
         except Exception as exc:
             _plex_failed(exc)
-        store.set_settings({"plex_url": chosen["url"], "plex_token": chosen["token"]})
+        store.set_settings({"plex_url": chosen["url"], "plex_token": chosen["token"],
+                            "plex_section": ""})
         result = await asyncio.to_thread(plex.check, effective_config())
         result["url"] = chosen["url"]
         result["server"] = chosen["name"]
@@ -603,7 +608,7 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
         """Forget the server and its token. Grabs stop asking Plex to
         scan; where Plex sees the music folder is kept, since it is still
         true if the same server is chosen again."""
-        store.set_settings({"plex_url": "", "plex_token": ""})
+        store.set_settings({"plex_url": "", "plex_token": "", "plex_section": ""})
         return {"ok": True}
 
     @app.post("/api/plex/test", dependencies=[protected])

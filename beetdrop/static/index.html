@@ -1027,10 +1027,18 @@
     </div>
     <p v-if="plexPin.error" class="note warntext">{{ plexPin.error }}</p>
 
-    <label>Where Plex sees the music folder
+    <label v-if="plexStatus && plexStatus.libraries && plexStatus.libraries.length">
+      Library to scan
+      <select v-model="draft.plex_section" @change="testPlex" :disabled="testingPlex">
+        <option value="">Automatic: whichever holds the music folder</option>
+        <option v-for="lib in plexLibraryChoices" :key="lib.key" :value="lib.key">
+          {{ lib.title }}{{ lib.type === 'artist' ? '' : ' (' + lib.type + ')' }}
+        </option>
+      </select>
+    </label>
+    <label>Where Plex sees the music folder <span class="note">(optional)</span>
       <input v-model="draft.plex_music_path" type="text" spellcheck="false"
-             autocomplete="off"
-             :placeholder="settings ? settings.music_root + ' (same as here)' : ''">
+             autocomplete="off" :placeholder="plexFolderPlaceholder">
     </label>
     <details class="explain">
       <summary>Or enter the address and token yourself</summary>
@@ -1053,17 +1061,6 @@
     </div>
     <template v-if="plexStatus">
       <p class="note" :class="{warntext: !plexStatus.ok}">{{ plexStatus.detail }}</p>
-      <div v-if="!plexStatus.ok && plexStatus.choices && plexStatus.choices.length"
-           class="pincard">
-        <p class="note">Which of these is Beetdrop's music folder?</p>
-        <button v-for="path in plexStatus.choices" :key="path" type="button"
-                class="candidate" :disabled="testingPlex" @click="usePlexFolder(path)">
-          <code>{{ path }}</code>
-          <span v-if="path === plexStatus.suggestion" class="note">
-            most likely &mdash; it is the folder mounted here as {{ settings && settings.music_root }}
-          </span>
-        </button>
-      </div>
       <p v-if="plexStatus.libraries && plexStatus.libraries.length" class="note">
         Plex's libraries:
         <template v-for="(lib, i) in plexStatus.libraries" :key="lib.title">
