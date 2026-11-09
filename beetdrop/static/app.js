@@ -85,6 +85,10 @@ const app = createApp({
       testingApple: false,
       testingPlex: false,
       plexStatus: null,
+      // A Plex PIN sign-in in progress. The account token never reaches
+      // the page; it only learns the code, then the servers.
+      plexPin: { id: "", code: "", state: "", servers: null, busy: false, error: "" },
+      plexPinTimer: null,
       appleStatus: "",
       appleOk: false,
       appleId: "",
@@ -738,6 +742,98 @@ const app = createApp({
       } catch (err) {
         if (err.message !== "password required") this.showToast("Save failed: " + err.message);
         return false;
+      }
+    },
+
+    async plexSignIn() {
+      this.plexCancel();
+      this.plexPin = { id: "", code: "", state: "", servers: null, busy: true, error: "" };
+      try {
+        const pin = await this.api("/api/plex/pin", { method: "POST" });
+        this.plexPin.id = pin.id;
+        this.plexPin.code = pin.code;
+        this.plexPin.state = "waiting";
+        const until = Date.now() + 1000 * (pin.expires_in || 900);
+        // Every two seconds: quick enough that the servers appear as soon
+        // as the code is entered, slow enough not to hammer plex.tv.
+        this.plexPinTimer = setInterval(() => this.plexPoll(until), 2000);
+      } catch (err) {
+        if (err.message !== "password required") {
+          this.plexPin.error = "Could not start a Plex sign-in: " + err.message;
+        }
+      } finally {
+        this.plexPin.busy = false;
+      }
+    },
+
+    async plexPoll(until) {
+      if (!this.plexPin.id || this.plexPin.busy) return;
+      if (Date.now() > until) {
+        this.plexPin.state = "expired";
+        this.plexStopPolling();
+        return;
+      }
+      this.plexPin.busy = true;
+      try {
+        const found = await this.api("/api/plex/pin/" + encodeURIComponent(this.plexPin.id));
+        this.plexPin.state = found.state;
+        if (found.state === "linked") {
+          this.plexStopPolling();
+          this.plexPin.servers = found.servers || [];
+        } else if (found.state === "expired" || found.state === "unknown") {
+          this.plexPin.state = "expired";
+          this.plexStopPolling();
+        }
+      } catch (err) {
+        // One failed poll is a hiccup; the next one tries again. Only
+        // say so, so a plex.tv outage is visible rather than silent.
+        if (err.message !== "password required") {
+          this.plexPin.error = "Checking with plex.tv: " + err.message;
+        }
+      } finally {
+        this.plexPin.busy = false;
+      }
+    },
+
+    async plexChoose(server) {
+      this.plexPin.busy = true;
+      this.plexPin.error = "";
+      try {
+        const result = await this.api(
+          "/api/plex/pin/" + encodeURIComponent(this.plexPin.id) + "/server",
+          { method: "POST", body: JSON.stringify({ server_id: server.id }) });
+        this.plexStatus = result;
+        this.settings = await this.api("/api/settings");
+        this.draft.plex_url = this.settings.plex_url || "";
+        this.plexPin = { id: "", code: "", state: "", servers: null, busy: false, error: "" };
+        this.showToast("Signed in to Plex: " + (result.server || server.name));
+      } catch (err) {
+        if (err.message !== "password required") this.plexPin.error = err.message;
+      } finally {
+        this.plexPin.busy = false;
+      }
+    },
+
+    plexStopPolling() {
+      if (this.plexPinTimer) clearInterval(this.plexPinTimer);
+      this.plexPinTimer = null;
+    },
+
+    plexCancel() {
+      this.plexStopPolling();
+      this.plexPin = { id: "", code: "", state: "", servers: null, busy: false, error: "" };
+    },
+
+    async plexSignOut() {
+      if (!window.confirm("Stop asking Plex to scan after each grab?")) return;
+      try {
+        await this.api("/api/plex/sign-out", { method: "POST" });
+        this.settings = await this.api("/api/settings");
+        this.draft.plex_url = "";
+        this.plexStatus = null;
+        this.showToast("Signed out of Plex");
+      } catch (err) {
+        if (err.message !== "password required") this.showToast(err.message);
       }
     },
 

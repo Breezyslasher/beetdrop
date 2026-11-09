@@ -198,6 +198,18 @@ filed into: the same request Sonarr and Lidarr make. Never the whole
 library; an album is one scan, not one per track; a lyrics pass that
 changed something scans the music library once at the end.
 
+**Sign in with Plex** saves finding the token. It shows a four-character
+code; enter it at [plex.tv/link](https://plex.tv/link) on any phone or
+computer, then pick the server from the list. Beetdrop tries the
+server's addresses - local ones first, plex.tv's relay last - and keeps
+the first that answers, with that server's own access token. The
+account-wide token plex.tv hands back is held in memory only until a
+server is chosen (half an hour at most), and is never written to disk. Only servers
+you own can be chosen: Plex lets only a server's owner ask it to scan,
+so a server shared with you is listed but greyed out. **Sign out of
+Plex** forgets the address and token and keeps the folder mapping. The
+address and token can still be typed in by hand.
+
 Beetdrop and Plex usually see the same files at different paths - `/music`
 here, `/data/music` in Plex's container. "Where Plex sees the music
 folder" maps one onto the other; **Save and test Plex** lists every
@@ -298,7 +310,9 @@ GET/PUT /api/settings             GET /api/health   GET /events (SSE)
 POST /api/login                   POST /api/ytdlp/update
 POST /api/lyrics/musixmatch-token POST /api/lyrics/scan
 POST /api/lyrics/tag-sources      GET  /api/library  GET /api/stats
-POST /api/plex/test
+POST /api/plex/test               POST /api/plex/sign-out
+POST /api/plex/pin                GET  /api/plex/pin/{id}
+POST /api/plex/pin/{id}/server
 ```
 
 ## Running it

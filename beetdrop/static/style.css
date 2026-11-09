@@ -802,6 +802,22 @@ textarea { padding: 10px 12px; resize: vertical; font-size: 13px; }
 }
 .warntext { color: var(--warn); }
 
+/* The Plex link code: read off one screen and typed on another, so
+   large, spaced and monospaced, where an O and a 0 cannot be confused. */
+.pincard {
+  margin-top: 12px;
+  padding: 14px;
+  background: var(--panel);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+}
+.pincode {
+  font: 600 32px/1.2 var(--mono);
+  letter-spacing: .3em;
+  color: var(--accent);
+  margin: 6px 0 10px;
+}
+
 /* Job card actions sit on one row rather than stacking full width. */
 .jobactions { display: flex; flex-wrap: wrap; gap: 8px; }
 .jobactions .retry { min-height: 34px; padding: 0 12px; font-size: 13px; }
