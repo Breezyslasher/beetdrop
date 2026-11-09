@@ -148,16 +148,70 @@ class TestWhichLibrary:
     SECTIONS = [{"key": "1", "title": "All", "type": "artist", "locations": ["/data"]},
                 {"key": "3", "title": "Music", "type": "artist", "locations": ["/data/music"]}]
 
-    def test_the_deepest_library_wins(self):
-        assert plex.section_for(self.SECTIONS, "/data/music/A/B")["key"] == "3"
+    def test_a_library_inside_another_is_in_both(self):
+        # Plex indexes the folder in each, so each has to scan it.
+        keys = [s["key"] for s in plex.sections_for(self.SECTIONS, "/data/music/A/B")]
+        assert keys == ["1", "3"]
 
     def test_a_shared_prefix_is_not_containment(self):
         # /data/music2 is not inside /data/music, however it is spelled.
         only = [self.SECTIONS[1]]
-        assert plex.section_for(only, "/data/music2/A") is None
+        assert plex.sections_for(only, "/data/music2/A") == []
 
     def test_nothing_contains_it(self):
-        assert plex.section_for(self.SECTIONS, "/elsewhere") is None
+        assert plex.sections_for(self.SECTIONS, "/elsewhere") == []
+
+
+DISK = "/srv/dev-disk-by-uuid-0000AAAA"
+# Shaped like a real NAS: one "Both" folder in two people's music
+# libraries, and video libraries beside them.
+NAS = [
+    {"key": "1", "title": "Movies", "type": "movie", "locations": [DISK + "/Media/VIDEO/movies"]},
+    {"key": "8", "title": "CD Music", "type": "artist",
+     "locations": [DISK + "/Media/Music/Both", DISK + "/Media/Music/ALL"]},
+    {"key": "9", "title": "Nick's Music", "type": "artist",
+     "locations": [DISK + "/Media/Music/explo", DISK + "/Media/Music/Nick",
+                   DISK + "/Media/Music/Both"]},
+]
+
+
+def mountinfo(source, point="/music"):
+    return "\n".join([
+        "600 500 0:52 / / rw,relatime - overlay overlay rw",
+        "610 600 8:17 %s %s rw,relatime - ext4 /dev/sdb1 rw" % (source, point),
+        "611 600 0:5 / /dev rw,nosuid - tmpfs tmpfs rw",
+    ])
+
+
+class TestFindingTheMapping:
+    def test_the_mounted_folder_is_read_from_mountinfo(self):
+        assert plex.source_parts(Path("/music"), mountinfo("/Media/Music/Nick")) == \
+            ["Media", "Music", "Nick"]
+
+    def test_a_folder_below_the_mount_keeps_its_rest(self):
+        info = mountinfo("/Media/Music", point="/data")
+        assert plex.source_parts(Path("/data/Nick"), info) == ["Media", "Music", "Nick"]
+
+    def test_a_space_in_the_folder_name_is_unescaped(self):
+        assert plex.source_parts(Path("/music"), mountinfo("/Media/My\\040Music")) == \
+            ["Media", "My Music"]
+
+    def test_not_a_bind_mount_says_nothing(self):
+        assert plex.source_parts(Path("/music"), mountinfo("/x", point="/other")) == []
+
+    def test_the_plex_folder_is_picked_out_by_its_tail(self):
+        tail = ["Media", "Music", "Nick"]
+        assert plex.suggest_mapping(NAS, tail) == DISK + "/Media/Music/Nick"
+
+    def test_a_folder_inside_a_library_folder_is_found_too(self):
+        tail = ["Media", "Music", "Nick", "Beetdrop"]
+        assert plex.suggest_mapping(NAS, tail) == DISK + "/Media/Music/Nick/Beetdrop"
+
+    def test_one_matching_name_is_not_enough(self):
+        # Every music library ends in something; "Nick" alone could be
+        # anyone's folder.
+        assert plex.suggest_mapping(NAS, ["Nick"]) == ""
+        assert plex.suggest_mapping(NAS, ["srv", "other", "Nick"]) == ""
 
 
 class TestScanning:
@@ -172,6 +226,17 @@ class TestScanning:
         line = plex.scan_folder(config, album)
         assert server.refreshes == [("3", "/data/music/Dolly Parton/9 to 5 (1980)")]
         assert "Music" in line
+
+    def test_a_folder_in_two_libraries_is_scanned_into_both(self, tmp_path):
+        both = FakePlex([(s["key"], s["title"], s["type"], s["locations"]) for s in NAS])
+        try:
+            config = Cfg(tmp_path, both.url, TOKEN, DISK + "/Media/Music/Both")
+            line = plex.scan_folder(config, config.music_root / "Artist")
+            target = DISK + "/Media/Music/Both/Artist"
+            assert sorted(both.refreshes) == [("8", target), ("9", target)]
+            assert '"CD Music" and "Nick\'s Music"' in line
+        finally:
+            both.close()
 
     def test_the_library_list_is_not_fetched_every_time(self, tmp_path, server):
         config = Cfg(tmp_path, server.url, TOKEN, "/data/music")
@@ -270,6 +335,28 @@ class TestSettings:
                 "plex_music_path": "/not/there"})
             result = client.post("/api/plex/test").json()
         assert result["ok"] is False and "none of its libraries" in result["detail"]
+        # The music library's folder is offered to pick; the movies' is not.
+        assert result["choices"] == ["/data/music"]
+
+    def test_the_test_button_suggests_the_mounted_folder(self, tmp_path, monkeypatch):
+        nas = FakePlex([(s["key"], s["title"], s["type"], s["locations"]) for s in NAS])
+        info = tmp_path / "mountinfo"
+        config = self.make(tmp_path)
+        info.write_text(mountinfo("/Media/Music/Nick", point=str(config.music_root)))
+        monkeypatch.setattr(plex, "MOUNTINFO", info)
+        try:
+            with TestClient(create_app(config)) as client:
+                client.put("/api/settings", json={"plex_url": nas.url, "plex_token": TOKEN})
+                result = client.post("/api/plex/test").json()
+        finally:
+            nas.close()
+        assert result["ok"] is False
+        assert result["suggestion"] == DISK + "/Media/Music/Nick"
+        assert result["choices"][0] == result["suggestion"]
+        assert result["suggestion"] in result["detail"]
+        # Every music folder is offered once, Both included only once.
+        assert result["choices"].count(DISK + "/Media/Music/Both") == 1
+        assert DISK + "/Media/VIDEO/movies" not in result["choices"]
 
 
 class TestAfterAGrab:
@@ -318,7 +405,7 @@ class TestAfterAGrab:
             client.__exit__(None, None, None)
         assert done["stage"] == "done"
         assert server.refreshes == [("3", "/data/music/Dolly Parton/9 to 5 (1980)")]
-        assert "Plex is scanning it into Music" in done["detail"]
+        assert "Plex is scanning it into \"Music\"" in done["detail"]
 
     def test_a_plex_that_is_down_does_not_fail_the_grab(self, tmp_path, monkeypatch):
         with socket.socket() as sock:

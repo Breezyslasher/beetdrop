@@ -858,6 +858,13 @@ const app = createApp({
       }
     },
 
+    usePlexFolder(path) {
+      // Fill the mapping in and test it straight away, so the answer is
+      // the same "Connected" line a typed value would get.
+      this.draft.plex_music_path = path;
+      return this.testPlex();
+    },
+
     saveGrabWithVideo() {
       try {
         localStorage.setItem("beetdrop.withVideo", this.grabWithVideo ? "1" : "0");
