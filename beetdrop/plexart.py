@@ -34,7 +34,8 @@ from . import plex
 from .plex import PlexError, _call, _contains
 
 VIDEO_EXTS = (".mp4", ".m4v")
-ARTIST = 8                 # Plex's metadata type number for an artist
+ARTIST = 8                 # Plex's metadata type numbers
+TRACK = 10
 STATE_FILE = "plex_artwork_sent.json"
 GIVE_UP_AFTER = 5          # uploads failing in a row: Plex will not take them
 
@@ -160,10 +161,99 @@ def send_artwork(config, on_progress: Callable[[float], None] = _noop,
     result.artists = len(artist_keys)
 
     seen = set()
-    failing_in_a_row = 0
+    failing = [0]
+    known = {"base": base}
+
+    def find_here(plex_file: str) -> Optional[Path]:
+        """The file here that Plex knows as `plex_file`; learns where Plex
+        sees the music folder from the first one found by its tail."""
+        here = (local_path(plex_file, known["base"], config.music_root)
+                if known["base"] else None)
+        if here is not None and here.is_file():
+            return here
+        found = by_tail(plex_file, config.music_root)
+        if found is None:
+            return None
+        if not known["base"]:
+            known["base"] = found[1]
+            on_detail("Plex sees the music folder at %s" % found[1])
+        return found[0]
+
+    def give(key: str, title: str, here: Optional[Path]) -> bool:
+        """Get this music video's embedded art into Plex. False when
+        Plex has refused often enough in a row to stop."""
+        if here is None or not here.is_file():
+            result.not_here += 1
+            return True
+        try:
+            art = embedded_art(here)
+        except Exception:
+            art = None
+        if art is None:
+            result.no_art += 1
+            return True
+        digest = hashlib.sha1(art[0]).hexdigest()
+        if sent_here.get(key) == digest:
+            result.unchanged += 1
+            return True
+        try:
+            _call("POST", url, token, "/library/metadata/%s/posters" % key,
+                  data=art[0], content_type=art[1])
+        except PlexError as refused:
+            # Not for extras, on this server. Have it re-read the file
+            # instead; not remembered, since it is cheap and adds nothing
+            # to Plex's store of images.
+            result.reasons["upload refused: %s" % refused] += 1
+            try:
+                _call("PUT", url, token, "/library/metadata/%s/refresh" % key)
+            except PlexError as exc:
+                result.failed += 1
+                failing[0] += 1
+                if failing[0] >= GIVE_UP_AFTER:
+                    result.stopped = ("%d in a row refused both an upload (%s) and a "
+                                      "refresh (%s)" % (failing[0], refused, exc))
+                    return False
+                return True
+            failing[0] = 0
+            result.refreshed += 1
+            on_detail("asked Plex to refresh %s" % (title or here.name))
+            return True
+        failing[0] = 0
+        sent_here[key] = digest
+        result.sent += 1
+        on_detail("sent artwork for %s" % (title or here.name))
+        if result.sent % 25 == 0:
+            _save_state(state_path, state)
+        return True
+
     try:
+        # Music videos linked to a track - named like the track's file,
+        # beside it - hang off the track as its primaryExtraKey. One
+        # request a library lists every track with it.
+        for library in libraries:
+            listing = _container(_call("GET", url, token,
+                                       "/library/sections/%s/all" % library["key"],
+                                       params={"type": TRACK}))
+            for track in listing.get("Metadata") or []:
+                extra = str(track.get("primaryExtraKey") or "").rstrip("/")
+                if not extra:
+                    continue
+                key = extra.rsplit("/", 1)[-1]
+                audio = _files(track)
+                if not key or key in seen or not audio:
+                    continue
+                seen.add(key)
+                result.videos += 1
+                song = find_here(audio[0])
+                video = next((song.with_suffix(ext) for ext in VIDEO_EXTS
+                              if song is not None and song.with_suffix(ext).is_file()),
+                             None)
+                if not give(key, track.get("title") or "", video):
+                    return result
+
+        # Music videos beside the artist rather than one track.
         for index, artist in enumerate(artist_keys):
-            on_progress(index / len(artist_keys) * 100.0)
+            on_progress(index / max(1, len(artist_keys)) * 100.0)
             extras = _container(_call("GET", url, token,
                                       "/library/metadata/%s/extras" % artist))
             for extra in extras.get("Metadata") or []:
@@ -173,56 +263,8 @@ def send_artwork(config, on_progress: Callable[[float], None] = _noop,
                     continue
                 seen.add(key)
                 result.videos += 1
-                here = local_path(files[0], base, config.music_root) if base else None
-                if here is None or not here.is_file():
-                    found = by_tail(files[0], config.music_root)
-                    if found is None:
-                        result.not_here += 1
-                        continue
-                    here = found[0]
-                    if not base:
-                        base = found[1]
-                        on_detail("Plex sees the music folder at %s" % base)
-                try:
-                    art = embedded_art(here)
-                except Exception:
-                    art = None
-                if art is None:
-                    result.no_art += 1
-                    continue
-                digest = hashlib.sha1(art[0]).hexdigest()
-                if sent_here.get(key) == digest:
-                    result.unchanged += 1
-                    continue
-                try:
-                    _call("POST", url, token, "/library/metadata/%s/posters" % key,
-                          data=art[0], content_type=art[1])
-                except PlexError as refused:
-                    # Not for extras, on this server. Have it re-read the
-                    # file instead; not remembered, since it is cheap and
-                    # adds nothing to Plex's store of images.
-                    result.reasons["upload refused: %s" % refused] += 1
-                    try:
-                        _call("PUT", url, token, "/library/metadata/%s/refresh" % key)
-                    except PlexError as exc:
-                        result.failed += 1
-                        failing_in_a_row += 1
-                        if failing_in_a_row >= GIVE_UP_AFTER:
-                            result.stopped = (
-                                "%d in a row refused both an upload (%s) and a "
-                                "refresh (%s)" % (failing_in_a_row, refused, exc))
-                            return result
-                        continue
-                    failing_in_a_row = 0
-                    result.refreshed += 1
-                    on_detail("asked Plex to refresh %s" % (extra.get("title") or here.name))
-                    continue
-                failing_in_a_row = 0
-                sent_here[key] = digest
-                result.sent += 1
-                on_detail("sent artwork for %s" % (extra.get("title") or here.name))
-                if result.sent % 25 == 0:
-                    _save_state(state_path, state)
+                if not give(key, extra.get("title") or "", find_here(files[0])):
+                    return result
     finally:
         _save_state(state_path, state)
     on_progress(100.0)

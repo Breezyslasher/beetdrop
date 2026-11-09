@@ -1,27 +1,25 @@
 """A track's music video, filed beside the track for Plex.
 
-Plex reads music videos in a music library as extras of the artist and
-album, and links one to a specific track when, in the same folder, its
-name starts with the track's exact filename and ends in a type suffix -
-"-video" for a music video:
+Plex links a music video to a track when it sits in the track's folder
+under the track's own file name, with the video's extension:
 
     Artist/Album (2013)/03 - Song.opus
-    Artist/Album (2013)/03 - Song-video.mp4
+    Artist/Album (2013)/03 - Song.mp4
 
-The suffix is what makes it a music video; a bare "03 - Song.mp4" is
-not read as one. Versions 0.65 to 0.67 named the video for the title
-alone ("Song-video.mp4"), which Plex does not link to "03 - Song";
-rename_title_named() renames those once.
+That is what a real Plex server links - the track then plays its video.
+Plex's support article, as quoted, has a "-video" suffix after the name
+("03 - Song-video.mp4"); on a real server that made an artist-level
+extra, listed under the artist's Extras but not linked to the song.
+Versions 0.65 to 0.72 used it, and before that the title alone
+("Song-video.mp4"); rename_to_track_names() renames both once.
 
 This is a different home from the Videos tab, which files a video into a
 separate library Kodi-style, because Kodi treats music and music videos
 as two library types and Plex does not. The two coexist: a companion is
 named for the track it belongs to, not for Kodi.
 
-The naming follows Plex's support article ("Adding Local Artist and
-Music Videos") as quoted, not a live server, so it lives in one
-function. If Plex ever wants it spelled differently, that is the only
-line that changes.
+The naming lives in one function. If Plex ever wants it spelled
+differently, that is the only line that changes.
 
 A companion is best effort, always. The audio is what was asked for;
 failing to find or fetch a video never fails the grab, it only says so.
@@ -62,9 +60,14 @@ _OFFICIAL = re.compile(r"\bofficial\b")
 
 def plex_video_filename(audio_name: str, ext: str = VIDEO_EXT) -> str:
     """The name Plex reads as the music video of the track filed as
-    `audio_name`: that filename without its extension, "-video", and the
-    video's own extension. "03 - Song.opus" -> "03 - Song-video.mp4"."""
-    return "%s%s.%s" % (Path(audio_name).stem, PLEX_VIDEO_SUFFIX, ext)
+    `audio_name`: the same name, the video's extension.
+    "03 - Song.opus" -> "03 - Song.mp4"."""
+    stem = Path(audio_name).stem
+    if Path(audio_name).suffix.lower() == "." + ext:
+        # An audio file that is itself .mp4 cannot share its name with
+        # its video; the suffix form is the only one left.
+        return "%s%s.%s" % (stem, PLEX_VIDEO_SUFFIX, ext)
+    return "%s.%s" % (stem, ext)
 
 
 def companion_path(audio_path: Path) -> Path:
@@ -75,6 +78,14 @@ def _title_named(audio_path: Path, title: str) -> Path:
     """Where 0.65 to 0.67 put the video: named for the title alone."""
     return audio_path.parent / ("%s%s.%s" % (sanitize_segment(title or "untitled"),
                                              PLEX_VIDEO_SUFFIX, VIDEO_EXT))
+
+
+def _earlier_names(audio_path: Path, title: str) -> list:
+    """Where earlier versions put this track's video: 0.68 to 0.72 with
+    "-video" after the track's file name, 0.65 to 0.67 after its title."""
+    return [audio_path.parent / ("%s%s.%s" % (audio_path.stem, PLEX_VIDEO_SUFFIX,
+                                              VIDEO_EXT)),
+            _title_named(audio_path, title)]
 
 
 @dataclass
@@ -236,15 +247,16 @@ def grab_companion(config, audio_path: Path, tags: FullTags, result: Result,
     """
     target = companion_path(audio_path)
     if target.exists():
-        # place_file would file "03 - Song-video (2).mp4", which Plex
-        # reads as nothing at all. One video per track; the first stays.
+        # place_file would file "03 - Song (2).mp4", which Plex links to
+        # nothing at all. One video per track; the first stays.
         return Companion(target, "a music video was already beside it")
-    old = _title_named(audio_path, tags.title or result.title)
-    if old != target and old.is_file():
-        # Grabbed by an earlier version under a name Plex does not link.
-        old.replace(target)
-        return Companion(target, "renamed the music video beside it so Plex "
-                                 "links it to the track")
+    for old in _earlier_names(audio_path, tags.title or result.title):
+        if old != target and old.is_file():
+            # Grabbed by an earlier version under a name Plex does not
+            # link to the track.
+            old.replace(target)
+            return Companion(target, "renamed the music video beside it so Plex "
+                                     "links it to the track")
 
     query = "%s %s" % (result.primary_artist, result.title)
     try:
@@ -311,8 +323,9 @@ def carry_companion(old_audio: Path, old_title: str,
     """
     source = companion_path(old_audio)
     if not source.is_file():
-        source = _title_named(old_audio, old_title)
-        if not source.is_file():
+        source = next((old for old in _earlier_names(old_audio, old_title)
+                       if old.is_file()), None)
+        if source is None:
             return None
     target = companion_path(new_audio)
     if target == source:
@@ -329,11 +342,13 @@ def carry_companion(old_audio: Path, old_title: str,
 _NUMBERED = re.compile(r"^(?:\d+-)?\d+ - (?P<title>.+)$")
 
 
-def rename_title_named(music_root: Path) -> int:
-    """Rename videos 0.65 to 0.67 named for the title ("Song-video.mp4")
-    to the name Plex links ("03 - Song-video.mp4"). Only where exactly
-    one numbered track in the same folder has that title, so a guess is
-    never made; returns how many were renamed."""
+def rename_to_track_names(music_root: Path) -> int:
+    """Rename videos earlier versions filed with the "-video" suffix to
+    the track's own name, which is what Plex links: "03 - Song-video.mp4"
+    (0.68 to 0.72) and "Song-video.mp4" (0.65 to 0.67) both become
+    "03 - Song.mp4". Only where the track is beside it - by its file
+    name, or as the one numbered track with that title - and nothing
+    has the new name yet; returns how many were renamed."""
     from .backfill import AUDIO_EXTS
     renamed = 0
     suffix = PLEX_VIDEO_SUFFIX + "." + VIDEO_EXT
@@ -345,14 +360,13 @@ def rename_title_named(music_root: Path) -> int:
                      if p.is_file() and p.suffix.lower() in AUDIO_EXTS]
         except OSError:
             continue
-        if any(p.stem == prefix for p in audio):
-            continue    # already named for its track
-        owners = [p for p in audio
-                  if (m := _NUMBERED.match(p.stem)) and m.group("title") == prefix]
+        owners = [p for p in audio if p.stem == prefix] or [
+            p for p in audio
+            if (m := _NUMBERED.match(p.stem)) and m.group("title") == prefix]
         if len(owners) != 1:
             continue
         target = companion_path(owners[0])
-        if target.exists():
+        if target == video or target.exists():
             continue
         try:
             video.replace(target)
@@ -360,3 +374,7 @@ def rename_title_named(music_root: Path) -> int:
         except OSError:
             continue
     return renamed
+
+
+# The name the startup rename went by while it only knew one older form.
+rename_title_named = rename_to_track_names

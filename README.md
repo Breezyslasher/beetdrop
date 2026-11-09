@@ -152,20 +152,20 @@ disk. Max quality is set with `BEETDROP_VIDEO_MAX_HEIGHT` or in Settings.
 Plex is the other way round: it reads music videos inside a music
 library, as extras linked to the track they belong to. Tick **+ music
 video** on the Songs search and a grab also finds that song's video and
-files it in the album folder, named for the audio file with Plex's
-`-video` suffix:
+files it in the album folder under the track's own file name:
 
 ```
 Artist/Album (2013)/03 - Song.opus
-Artist/Album (2013)/03 - Song-video.mp4
+Artist/Album (2013)/03 - Song.mp4
 ```
 
-Plex's rule ("Adding Local Artist and Music Videos") is that the video
-must start with the track's exact filename and sit in the same folder;
-the suffix is what marks it as a music video, so a bare `03 - Song.mp4`
-is not one. Versions 0.65 to 0.67 named it for the title alone
-(`Song-video.mp4`), which Plex links to nothing; those are renamed once,
-in the background, the first time a newer version starts.
+That is what a real Plex server links to the track. Plex's support
+article, as quoted, adds a `-video` suffix (`03 - Song-video.mp4`); on a
+real server that made an extra of the artist, not of the song. Versions
+0.65 to 0.72 used that form (and before 0.68, the title alone:
+`Song-video.mp4`); those are renamed once, in the background, the first
+time a newer version starts - only where the track is beside the video
+and nothing already has the new name.
 
 The video's own YouTube thumbnail is embedded as its cover art - the
 full 1280x720 frame where YouTube has one, not the letterboxed 480x360
@@ -229,8 +229,9 @@ the same page) uploads each music video's embedded artwork to Plex as
 that video's thumbnail: it walks the artists of the music library, asks
 Plex for each one's extras, maps each extra's file back to the file
 here, and uploads the image (`POST /library/metadata/{id}/posters`, as
-python-plexapi does; owner only). Plex may refuse a picture for an extra
-- python-plexapi offers that upload for movies, artists and albums, not
+python-plexapi does; owner only). It covers videos linked to a track - found through each track's
+`primaryExtraKey` - and those beside the artist. Plex may refuse a
+picture for an extra - python-plexapi offers that upload for movies, artists and albums, not
 clips - and then it is asked to refresh the item instead, which re-reads
 the file and, if that Plex reads it, the embedded art; the job card
 counts the two apart. Plex keeps every image uploaded to an item, so a picture already

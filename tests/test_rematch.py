@@ -263,11 +263,11 @@ class TestApplyingAChoice:
         # video left under the old name in the old folder links to nothing.
         config = self._library(tmp_path)
         track = self._unverified(config)
-        (track.parent / "track-video.mp4").write_bytes(b"clip")
+        (track.parent / "track.mp4").write_bytes(b"clip")
         outcome = apply_choice(config, FakeMB(), track, "rec-1",
                                "Some Song", "Unknown")
         assert outcome.moved_video
-        expected = outcome.new_path.with_name(outcome.new_path.stem + "-video.mp4")
+        expected = outcome.new_path.with_suffix(".mp4")
         assert expected.read_bytes() == b"clip"
         # And the folder it left is empty, so it goes too.
         assert not track.parent.exists()
@@ -281,7 +281,7 @@ class TestApplyingAChoice:
         outcome = apply_choice(config, FakeMB(), track, "rec-1",
                                "Some Song", "Unknown", move=False)
         assert outcome.moved_video
-        assert (track.parent / "track-video.mp4").is_file()
+        assert (track.parent / "track.mp4").is_file()
         assert not (track.parent / "Some Song-video.mp4").exists()
 
     def test_the_emptied_review_folder_is_removed(self, tmp_path):
