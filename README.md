@@ -214,7 +214,13 @@ Beetdrop and Plex usually see the same files at different paths - `/music`
 here, `/data/music` in Plex's container. "Where Plex sees the music
 folder" maps one onto the other; **Save and test Plex** lists every
 folder Plex knows about, so the right value can be copied rather than
-guessed. The token is stored on the server like the Apple token and never
+guessed. When the mapping is missing or wrong, the music libraries'
+folders are offered as buttons, and the likely one comes first:
+inside a container Beetdrop can read which folder of the host's disk
+is mounted as `/music` (`/proc/self/mountinfo`), and picks out the Plex
+folder that ends the same way. A folder that is in more than one
+library - one "Both" folder in two people's music libraries - is
+scanned into each. The token is stored on the server like the Apple token and never
 sent back to the page.
 
 Requests follow Plex's published OpenAPI description: `GET

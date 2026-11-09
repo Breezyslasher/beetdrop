@@ -1053,6 +1053,17 @@
     </div>
     <template v-if="plexStatus">
       <p class="note" :class="{warntext: !plexStatus.ok}">{{ plexStatus.detail }}</p>
+      <div v-if="!plexStatus.ok && plexStatus.choices && plexStatus.choices.length"
+           class="pincard">
+        <p class="note">Which of these is Beetdrop's music folder?</p>
+        <button v-for="path in plexStatus.choices" :key="path" type="button"
+                class="candidate" :disabled="testingPlex" @click="usePlexFolder(path)">
+          <code>{{ path }}</code>
+          <span v-if="path === plexStatus.suggestion" class="note">
+            most likely &mdash; it is the folder mounted here as {{ settings && settings.music_root }}
+          </span>
+        </button>
+      </div>
       <p v-if="plexStatus.libraries && plexStatus.libraries.length" class="note">
         Plex's libraries:
         <template v-for="(lib, i) in plexStatus.libraries" :key="lib.title">

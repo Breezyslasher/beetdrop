@@ -10,8 +10,8 @@ send per grab, and it never rescans the whole library.
 Two things make that harder than one URL:
 
 - Which library? Plex scans by section, so the folder has to be matched
-  to the section whose location contains it - the longest one, since
-  libraries can nest.
+  to the sections whose locations contain it - every one of them, since
+  a folder can be in several libraries and Plex indexes it in each.
 - Whose path? Beetdrop and Plex usually see the same files at different
   places (/music here, /data/music there). The Plex path for the music
   library is a setting, and folders under the music root are mapped onto
@@ -29,8 +29,9 @@ token in the X-Plex-Token header.
 from __future__ import annotations
 
 import posixpath
+import re
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional
 
 import requests
@@ -125,15 +126,19 @@ def _contains(location: str, path: str) -> bool:
     return path == location or path.startswith(location.rstrip("/") + "/")
 
 
-def section_for(all_sections: list, path: str) -> Optional[dict]:
-    """The library that holds `path`: the deepest location containing it,
-    so a library inside another is chosen over the one around it."""
-    best, depth = None, -1
-    for section in all_sections:
-        for location in section["locations"]:
-            if _contains(location, path) and len(location) > depth:
-                best, depth = section, len(location)
-    return best
+def sections_for(all_sections: list, path: str) -> list:
+    """Every library that holds `path`.
+
+    One folder can belong to several libraries - the same "Both" folder
+    in two people's music libraries, or a library inside another - and
+    Plex indexes it in each, so each has to be asked to scan it.
+    """
+    return [section for section in all_sections
+            if any(_contains(location, path) for location in section["locations"])]
+
+
+def _titles(found: list) -> str:
+    return " and ".join('"%s"' % s["title"] for s in found)
 
 
 def scan_folder(config, folder: Path) -> str:
@@ -146,23 +151,92 @@ def scan_folder(config, folder: Path) -> str:
         return ""
     target = plex_path(folder, config.music_root, config.plex_music_path)
     try:
-        section = section_for(sections(config.plex_url, config.plex_token), target)
-        if section is None:
+        found = sections_for(sections(config.plex_url, config.plex_token), target)
+        if not found:
             # Perhaps a library was added since the list was cached.
-            section = section_for(
+            found = sections_for(
                 sections(config.plex_url, config.plex_token, fresh=True), target)
-        if section is None:
+        if not found:
             return ("Plex has no library containing %s - check where Plex sees "
                     "the music folder in Settings" % target)
         # POST, as the API documents it: a refresh changes server state.
         # `path` restricts it to that folder, so the library is never
         # rescanned whole for one grab.
-        _call("POST", config.plex_url, config.plex_token,
-              "/library/sections/%s/refresh" % section["key"],
-              params={"path": target})
-        return "Plex is scanning it into %s" % section["title"]
+        for section in found:
+            _call("POST", config.plex_url, config.plex_token,
+                  "/library/sections/%s/refresh" % section["key"],
+                  params={"path": target})
+        return "Plex is scanning it into %s" % _titles(found)
     except PlexError as exc:
         return "Plex was not told: %s" % exc
+
+
+MOUNTINFO = Path("/proc/self/mountinfo")
+
+
+def _unescape(field: str) -> str:
+    # mountinfo writes space, tab, newline and backslash as octal escapes.
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), field)
+
+
+def source_parts(music_root: Path, mountinfo: Optional[str] = None) -> list:
+    """The music folder's path on the filesystem it was mounted from.
+
+    In a container, /music is a bind mount, and the kernel records which
+    folder of the host's disk it came from (mountinfo's "root" field):
+    /Nas-files/Media/Music/Nick, say, for a disk the host mounts at
+    /srv/dev-disk-by-uuid-.... That is the tail of the path Plex knows
+    the same folder by, which is enough to pick it out of Plex's list.
+    Empty when it cannot be told - no /proc, or not a bind mount.
+    """
+    if mountinfo is None:
+        try:
+            mountinfo = MOUNTINFO.read_text()
+        except OSError:
+            return []
+    root = PurePosixPath(music_root.as_posix())
+    best, best_point = None, None
+    for line in mountinfo.splitlines():
+        fields = line.split()
+        if len(fields) < 5:
+            continue
+        source, point = PurePosixPath(_unescape(fields[3])), PurePosixPath(_unescape(fields[4]))
+        if (root == point or point in root.parents) and (
+                best_point is None or len(point.parts) > len(best_point.parts)):
+            best, best_point = source, point
+    if best is None or best == PurePosixPath("/"):
+        return []
+    return [p for p in (best / root.relative_to(best_point)).parts if p != "/"]
+
+
+def suggest_mapping(all_sections: list, tail: list) -> str:
+    """The Plex folder that is most likely Beetdrop's music folder.
+
+    Matches the end of a Plex library location against the music folder's
+    path on its own disk (see source_parts), so
+    /srv/dev-disk-by-uuid-1FF6/Nas-files/Media/Music/Nick is found for a
+    folder mounted from /Nas-files/Media/Music/Nick. Two matching folder
+    names at least, so a lone "music" decides nothing. Music libraries
+    win a tie.
+    """
+    best, best_score = "", None
+    for section in all_sections:
+        for location in section["locations"]:
+            parts = [p for p in PurePosixPath(location).parts if p != "/"]
+            for end in range(len(tail), 0, -1):
+                k = 0
+                while (k < min(end, len(parts))
+                       and tail[end - 1 - k] == parts[len(parts) - 1 - k]):
+                    k += 1
+                if k < 2:
+                    continue
+                score = (k, section["type"] == "artist", end)
+                if best_score is None or score > best_score:
+                    rest = tail[end:]
+                    best = posixpath.join(location.rstrip("/"), *rest) if rest else \
+                        location.rstrip("/")
+                    best_score = score
+    return best
 
 
 def check(config) -> dict:
@@ -175,13 +249,28 @@ def check(config) -> dict:
     except PlexError as exc:
         return {"ok": False, "detail": str(exc)}
     target = plex_path(config.music_root, config.music_root, config.plex_music_path)
-    section = section_for(all_sections, target)
+    found = sections_for(all_sections, target)
     libraries = [{"title": s["title"], "type": s["type"], "locations": s["locations"]}
                  for s in all_sections]
-    if section is None:
-        return {"ok": False, "libraries": libraries,
-                "detail": ("Plex answered, but none of its libraries contains %s. "
-                           "Set where Plex sees your music folder - one of the "
-                           "locations listed." % target)}
-    return {"ok": True, "libraries": libraries, "section": section["title"],
-            "detail": "Connected. Grabs will be scanned into \"%s\"." % section["title"]}
+    if not found:
+        suggestion = suggest_mapping(all_sections, source_parts(config.music_root))
+        # Folders to pick from: music libraries' first, deduplicated, the
+        # likely one leading.
+        choices = [suggestion] if suggestion else []
+        for s in sorted(all_sections, key=lambda s: s["type"] != "artist"):
+            for location in s["locations"]:
+                if s["type"] == "artist" and location not in choices:
+                    choices.append(location)
+        detail = ("Plex answered, but none of its libraries contains %s. "
+                  "Set where Plex sees your music folder" % target)
+        if suggestion:
+            detail += (" - it looks like %s, from the folder mounted as %s."
+                       % (suggestion, config.music_root))
+        else:
+            detail += ": the folder on the Plex machine that is mounted as %s." \
+                % config.music_root
+        return {"ok": False, "libraries": libraries, "detail": detail,
+                "suggestion": suggestion, "choices": choices}
+    return {"ok": True, "libraries": libraries, "section": found[0]["title"],
+            "sections": [s["title"] for s in found],
+            "detail": "Connected. Grabs will be scanned into %s." % _titles(found)}
