@@ -612,3 +612,82 @@ def test_labels_are_set_aside_but_song_words_are_not():
                             [yt("Moon", 200, ("The Black Ghosts",))])[0] is None
     assert match_on_youtube("Madonna - Music (Official Music Video)", 225.0,
                             [yt("Music", 225, ("Madonna",))])[0] is not None
+
+
+class TestSecondRealRun:
+    """From a second real run: near misses, and searches with no artist."""
+
+    def test_a_version_label_on_youtubes_side_at_the_exact_length(self):
+        from beetdrop.videoart import match_on_youtube
+        found, _ = match_on_youtube("Stan", 404.0,
+                                    [yt("Stan (Long Version) (feat. Dido)", 404, ("Eminem",))])
+        assert found is not None
+        found, _ = match_on_youtube("The Way I Am", 290.0,
+                                    [yt("Eminem - The Way I Am (Dirty Version)", 290, ("Eminem",))])
+        assert found is not None
+
+    def test_but_not_a_second_or_two_off(self):
+        from beetdrop.videoart import match_on_youtube
+        found, _ = match_on_youtube("Stan", 404.0,
+                                    [yt("Stan (Long Version)", 406, ("Eminem",))])
+        assert found is None
+
+    def test_a_version_the_file_asks_for_is_still_required(self):
+        from beetdrop.videoart import match_on_youtube
+        found, _ = match_on_youtube("Weezer - Say It Ain't So (Version 3)", 258.0,
+                                    [yt("Say It Ain't So (2024 Remaster)", 258, ("Weezer",))])
+        assert found is None
+
+    def test_live_and_lyric_uploads_get_no_such_allowance(self):
+        from beetdrop.videoart import match_on_youtube
+        assert match_on_youtube("Song", 200.0, [yt("Song (Live Version)", 200)])[0] is None
+        assert match_on_youtube("Song", 200.0, [yt("Song (Lyrics)", 200)])[0] is None
+
+    def test_an_artist_in_front_without_a_dash(self):
+        from beetdrop.videoart import match_on_youtube
+        found, _ = match_on_youtube(
+            "Crocodile Rock (Remastered)", 236.0,
+            [yt("Elton John Crocodile Rock (digitally remastered)", 239, ("Elton John",))])
+        assert found is not None
+
+    def test_a_track_number_without_a_dash_in_a_numbered_folder(self, tmp_path):
+        from beetdrop.videoart import search_query
+        for name in ("10 FAITH.mp4", "11 A to Z.mp4", "12 Tsuki to Taiyou.mp4"):
+            (tmp_path / name).write_bytes(b"x")
+        assert search_query(tmp_path / "10 FAITH.mp4") == "FAITH"
+        alone = tmp_path / "solo"
+        alone.mkdir()
+        (alone / "99 Luftballons.mp4").write_bytes(b"x")
+        assert search_query(alone / "99 Luftballons.mp4") == "99 Luftballons"
+
+    def test_the_artist_comes_from_the_folder_when_the_name_has_none(self, tmp_path):
+        from beetdrop.videoart import video_artist, with_artist
+        video = tmp_path / "music" / "Hiroshi Kitadani" / "One Piece" / "We Are.mp4"
+        video.parent.mkdir(parents=True)
+        video.write_bytes(b"not an mp4")
+        assert video_artist(video, [tmp_path / "music"]) == "Hiroshi Kitadani"
+        assert with_artist("We Are", "Hiroshi Kitadani") == "Hiroshi Kitadani - We Are"
+        assert with_artist("Weezer - Photograph", "Weezer") == "Weezer - Photograph"
+
+    def test_a_title_alone_needs_the_length_to_the_second(self):
+        # Searched as "One Piece - We Are"; the result is by the singer.
+        from beetdrop.videoart import match_on_youtube
+        hit = [yt("We Are!", 240, ("Hiroshi Kitadani",))]
+        assert match_on_youtube("One Piece - We Are", 240.3, hit, bare="We Are")[0] is not None
+        assert match_on_youtube("One Piece - We Are", 242.0, hit, bare="We Are")[0] is None
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+def test_the_search_carries_the_artist_from_the_videos_tags(tmp_path):
+    from mutagen.mp4 import MP4
+    video = tmp_path / "music" / "Clips" / "fish.mp4"
+    make_mp4(video)
+    tagged = MP4(str(video))
+    if tagged.tags is None:
+        tagged.add_tags()
+    tagged.tags["\xa9ART"] = ["Kana-Boon"]
+    tagged.save()
+    asked = []
+    backfill_video_art([tmp_path / "music"], search=lambda q: asked.append(q) or [],
+                       sleep=lambda s: None)
+    assert asked == ["Kana-Boon - fish"]
