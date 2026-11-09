@@ -187,6 +187,28 @@ and a look in Plex before relying on it. If Plex wants it spelled
 differently, it is one function (`plex_video_filename` in
 `companion.py`).
 
+## Telling Plex
+
+Plex notices new files on its own schedule - a periodic scan, or a
+filesystem watcher that often does not fire across a network share or a
+container mount - so a grab can sit on disk for hours before it appears.
+Give Beetdrop your Plex server's address and token in Settings and, when
+a job finishes, it asks Plex for a partial scan of exactly the folder it
+filed into: the same request Sonarr and Lidarr make. Never the whole
+library; an album is one scan, not one per track; a lyrics pass that
+changed something scans the music library once at the end.
+
+Beetdrop and Plex usually see the same files at different paths - `/music`
+here, `/data/music` in Plex's container. "Where Plex sees the music
+folder" maps one onto the other; **Save and test Plex** lists every
+folder Plex knows about, so the right value can be copied rather than
+guessed. The token is stored on the server like the Apple token and never
+sent back to the page.
+
+It is best effort: a Plex that is off or unreachable is noted on the job
+card and never fails a grab. Env: `BEETDROP_PLEX_URL`,
+`BEETDROP_PLEX_TOKEN`, `BEETDROP_PLEX_MUSIC_PATH`.
+
 ## Fixing a wrong match
 
 There is no acoustic fingerprinting, so a cover or a same-length
@@ -268,6 +290,7 @@ GET/PUT /api/settings             GET /api/health   GET /events (SSE)
 POST /api/login                   POST /api/ytdlp/update
 POST /api/lyrics/musixmatch-token POST /api/lyrics/scan
 POST /api/lyrics/tag-sources      GET  /api/library  GET /api/stats
+POST /api/plex/test
 ```
 
 ## Running it
@@ -283,7 +306,9 @@ library), set PUID/PGID to the library owner. Environment variables:
 `BEETDROP_LYRICS`, `BEETDROP_LYRICS_PROVIDER` (lrclib|musixmatch|apple),
 `BEETDROP_MXM_TOKEN` (Musixmatch token), `BEETDROP_APPLE_TOKEN`
 (Apple Music media-user-token), `BEETDROP_APPLE_STOREFRONT` (default us),
-`BEETDROP_WORD_LYRICS` (per-word timing, default off), `VIDEO_PATH` (music-video
+`BEETDROP_WORD_LYRICS` (per-word timing, default off), `BEETDROP_PLEX_URL`,
+`BEETDROP_PLEX_TOKEN`, `BEETDROP_PLEX_MUSIC_PATH` (scan Plex after each
+grab), `VIDEO_PATH` (music-video
 library; defaults to a subfolder of /music), `BEETDROP_VIDEO_MAX_HEIGHT`
 (video quality cap in px, default 1080, 0 = uncapped), `BEETDROP_TRACK_DELAY`,
 `BEETDROP_MIN_FREE_MB`, `BEETDROP_KEEP_JOBS`, `BEETDROP_KEEP_DAYS`,

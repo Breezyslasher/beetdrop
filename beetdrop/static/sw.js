@@ -9,7 +9,7 @@
 // the old shell is gone rather than waiting to be overwritten by a
 // successful online load. A whole-UI change is exactly when an offline
 // launch must not serve the previous look.
-const CACHE = "beetdrop-shell-v30";
+const CACHE = "beetdrop-shell-v31";
 const SHELL = [
   "/",
   "/static/style.css",

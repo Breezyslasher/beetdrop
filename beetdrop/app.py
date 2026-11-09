@@ -83,6 +83,9 @@ class SettingsUpdate(BaseModel):
     apple_token: Optional[str] = None  # "" clears
     apple_storefront: Optional[str] = None
     word_lyrics: Optional[bool] = None
+    plex_url: Optional[str] = None
+    plex_token: Optional[str] = None  # "" clears; never sent back
+    plex_music_path: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -343,6 +346,11 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             "lyrics_provider": config.lyrics_provider,
             "musixmatch_token_set": bool(config.musixmatch_token),
             "apple_token_set": bool(config.apple_token),
+            "plex_url": config.plex_url,
+            # Like the Apple token, only whether one is set: a Plex token
+            # is the whole account, and the page never needs to read it.
+            "plex_token_set": bool(config.plex_token),
+            "plex_music_path": config.plex_music_path,
             "apple_storefront": config.apple_storefront,
             "word_lyrics": config.word_lyrics,
             "video_root": str(config.video_root),
@@ -383,11 +391,24 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
                 detail="lyrics_provider must be one of %s" % (LYRICS_PROVIDERS,))
         updates = {k: v for k, v in body.model_dump().items()
                    if v is not None and k not in ("cookies", "musixmatch_token",
-                                                  "apple_token", "word_lyrics")}
+                                                  "apple_token", "word_lyrics",
+                                                  "plex_token")}
         if body.word_lyrics is not None:
             updates["word_lyrics"] = "1" if body.word_lyrics else "0"
         if body.apple_token is not None:
             updates["apple_token"] = body.apple_token.strip()
+        if body.plex_token is not None:
+            updates["plex_token"] = body.plex_token.strip()
+        if body.plex_url is not None:
+            url = body.plex_url.strip().rstrip("/")
+            if url and not url.startswith(("http://", "https://")):
+                raise HTTPException(
+                    status_code=422,
+                    detail="the Plex address needs http:// or https://, "
+                           "e.g. http://192.168.1.10:32400")
+            updates["plex_url"] = url
+        if body.plex_music_path is not None:
+            updates["plex_music_path"] = body.plex_music_path.strip()
         if "lyrics" in updates:
             updates["lyrics"] = "1" if updates["lyrics"] else "0"
         if body.musixmatch_token is not None:
@@ -518,6 +539,14 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
         applesignin.AppleSignIn(base.config_dir).clear_session()
         store.set_settings({"apple_token": ""})
         return {"ok": True, "detail": "Apple session and token cleared"}
+
+    @app.post("/api/plex/test", dependencies=[protected])
+    async def api_plex_test():
+        """Can Plex be reached, and which library will grabs be scanned
+        into. Lists Plex's own folder paths, which is the quickest way to
+        see what "where Plex sees the music folder" should say."""
+        from . import plex
+        return await asyncio.to_thread(plex.check, effective_config())
 
     @app.post("/api/lyrics/apple-test", dependencies=[protected])
     async def api_apple_test():

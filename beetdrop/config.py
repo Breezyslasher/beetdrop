@@ -81,6 +81,13 @@ class Config:
     # Off by default: players that do not understand the inline <mm:ss.xx>
     # tags render them as visible text.
     word_lyrics: bool = field(default_factory=lambda: _env("WORD_LYRICS", "0") in ("1", "true", "yes"))
+    # Plex: after a job files something, ask the server for a partial
+    # scan of that folder. Inert until both address and token are set.
+    plex_url: str = field(default_factory=lambda: _env("PLEX_URL", ""))
+    plex_token: str = field(default_factory=lambda: _env("PLEX_TOKEN", ""))
+    # Where Plex sees the music library, when its mount differs from ours
+    # (/data/music there, /music here). Blank means the same path.
+    plex_music_path: str = field(default_factory=lambda: _env("PLEX_MUSIC_PATH", ""))
 
     def __post_init__(self):
         # A blank video_root lives beside the music library so a single

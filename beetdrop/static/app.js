@@ -83,6 +83,8 @@ const app = createApp({
       taggingSources: false,
       notifyOnDone: localStorage.getItem("beetdrop.notify") === "1",
       testingApple: false,
+      testingPlex: false,
+      plexStatus: null,
       appleStatus: "",
       appleOk: false,
       appleId: "",
@@ -678,7 +680,11 @@ const app = createApp({
             ? this.settings.video_max_height : 1080,
           cookies: "",
           new_password: "",
+          plex_url: this.settings.plex_url || "",
+          plex_token: "",
+          plex_music_path: this.settings.plex_music_path || "",
         };
+        this.plexStatus = null;
         await this.refreshHealth();
       } catch (err) {
         if (err.message !== "password required") this.showToast("Cannot load settings: " + err.message);
@@ -695,6 +701,8 @@ const app = createApp({
         apple_storefront: this.draft.apple_storefront,
         word_lyrics: !!this.draft.word_lyrics,
         video_max_height: Number(this.draft.video_max_height),
+        plex_url: (this.draft.plex_url || "").trim(),
+        plex_music_path: (this.draft.plex_music_path || "").trim(),
       };
       // Only send the library paths when they are editable (not env-locked).
       if (this.settings && !this.settings.music_root_locked) {
@@ -706,6 +714,8 @@ const app = createApp({
       // Only send the Apple token when one was typed; the field is left
       // blank on open so a saved token is never echoed back to the browser.
       if (this.draft.apple_token) update.apple_token = this.draft.apple_token;
+      // Same for the Plex token: it is the whole Plex account.
+      if (this.draft.plex_token) update.plex_token = this.draft.plex_token;
       if (this.draft.new_password) update.password = this.draft.new_password;
       if (this.draft.cookies && this.draft.cookies.trim()) update.cookies = this.draft.cookies;
       try {
@@ -724,8 +734,31 @@ const app = createApp({
         }
         this.showToast("Settings saved");
         this.refreshHealth();
+        return true;
       } catch (err) {
         if (err.message !== "password required") this.showToast("Save failed: " + err.message);
+        return false;
+      }
+    },
+
+    async testPlex() {
+      // Save first, so the test checks what is on the page rather than
+      // what was saved before someone started typing.
+      this.testingPlex = true;
+      this.plexStatus = null;
+      try {
+        // A save that failed - a bad address, say - must not be followed
+        // by a test of whatever was saved before, which would read as a
+        // verdict on what is on the page.
+        if (!(await this.saveSettings())) return;
+        this.draft.plex_token = "";
+        this.plexStatus = await this.api("/api/plex/test", { method: "POST" });
+      } catch (err) {
+        if (err.message !== "password required") {
+          this.plexStatus = { ok: false, detail: err.message };
+        }
+      } finally {
+        this.testingPlex = false;
       }
     },
 
