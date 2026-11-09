@@ -802,3 +802,42 @@ class TestChoosingByHand:
             bad_id = client.post("/api/videos/art", json={
                 "path": str(music / "Kana-Boon" / "fish.mp4"), "video_id": "../../x"})
             assert bad_id.status_code == 400
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+def test_a_video_that_cannot_be_written_says_why(tmp_path, monkeypatch):
+    import beetdrop.videoart as videoart
+    music = tmp_path / "music"
+    video = music / "Both" / "Ed Sheeran" / "Perfect.mp4"
+    make_mp4(video)
+    monkeypatch.setattr(videoart, "fetch_thumbnail", lambda vid, url="": (JPEG, "image/jpeg"))
+
+    def denied(src, dst, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(videoart.shutil, "copy2", denied)
+    config = Config(music_root=music, scratch_root=tmp_path / "s", config_dir=tmp_path / "c")
+    with TestClient(create_app(config)) as client:
+        response = client.post("/api/videos/art", json={"path": str(video),
+                                                        "video_id": "fffffffffff"})
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "could not write Perfect.mp4: permission denied - Beetdrop cannot write "
+        "in that folder")
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+def test_the_list_says_which_cannot_be_written(tmp_path, monkeypatch):
+    import beetdrop.videoart as videoart
+    from beetdrop.videoart import list_missing_art
+    music = tmp_path / "music"
+    mine = music / "explo" / "a.mp4"
+    theirs = music / "Both" / "b.mp4"
+    make_mp4(mine)
+    make_mp4(theirs)
+    real = videoart.os.access
+    # Tests run as root, which chmod cannot stop; ask os.access instead.
+    monkeypatch.setattr(videoart.os, "access",
+                        lambda path, mode: "Both" not in str(path) and real(path, mode))
+    videos, _ = list_missing_art([music])
+    assert {v["name"]: v["writable"] for v in videos} == {"a.mp4": True, "b.mp4": False}

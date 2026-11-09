@@ -805,6 +805,11 @@ def list_missing_art(roots: Iterable[Path], limit: int = 50) -> tuple:
         title = video_title(video) or search_query(video)
         found.append({"path": str(video), "name": video.name, "folder": folder,
                       "duration": length,
+                      # Artwork is written to a copy beside it that then
+                      # replaces it: both the folder and the file must be
+                      # Beetdrop's to change.
+                      "writable": (os.access(video.parent, os.W_OK | os.X_OK)
+                                   and os.access(video, os.W_OK)),
                       "query": with_artist(title, video_artist(video, roots))})
     return found, total
 

@@ -1202,10 +1202,20 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
         video = _video_in_library(body.path)
         if not re.fullmatch(r"[A-Za-z0-9_-]{11}", body.video_id or ""):
             raise HTTPException(status_code=400, detail="not a YouTube video id")
+        from .videoart import _why
         try:
             await asyncio.to_thread(choose_art, video, body.video_id)
         except LookupError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except Exception as exc:
+            # Said in words - a bare 500 reached the page as an empty
+            # message - and logged in full for the container log.
+            import traceback
+            traceback.print_exc()
+            raise HTTPException(
+                status_code=500,
+                detail="could not write %s: %s" % (video.name, _why(exc, writing=True))
+            ) from exc
         return {"ok": True, "detail": "artwork embedded in %s" % video.name}
 
     @app.post("/api/plex/send-artwork", status_code=202, dependencies=[protected])
