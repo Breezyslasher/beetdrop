@@ -346,3 +346,48 @@ class TestConvertingWebmNamedMp4:
         assert any("vorbis" in why for why in result.left)
         assert "WebM/MKV left as they were" in result.report()
         assert not [p for p in tmp_path.iterdir() if p.name.startswith(".")]
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+@pytest.mark.usefixtures("loopback_only")
+class TestTellingPlex:
+    def run_job(self, tmp_path, with_image):
+        import beetdrop.plex as plex
+        from test_plex import TOKEN, FakePlex
+
+        plex._cache.clear()
+        music = tmp_path / "music"
+        video = music / "Artist" / "Album" / "01 - Song-video.mp4"
+        make_mp4(video)
+        if with_image:
+            video.with_name("01 - Song-thumb.jpg").write_bytes(JPEG)
+        server = FakePlex([("3", "Music", "artist", ["/data/music"])])
+        config = Config(music_root=music, scratch_root=tmp_path / "s",
+                        config_dir=tmp_path / "c")
+        try:
+            with TestClient(create_app(config)) as client:
+                client.put("/api/settings", json={
+                    "plex_url": server.url, "plex_token": TOKEN,
+                    "plex_music_path": "/data/music"})
+                job = client.post("/api/videos/embed-art").json()
+                deadline = time.time() + 10
+                while time.time() < deadline:
+                    done = next(j for j in client.get("/api/jobs").json()["jobs"]
+                                if j["id"] == job["id"])
+                    if done["stage"] == "done" and (
+                            "Plex" in done["detail"] or not with_image):
+                        break
+                    time.sleep(0.05)
+            return done, server.refreshes
+        finally:
+            server.close()
+            plex._cache.clear()
+
+    def test_changed_videos_are_scanned_into_plex(self, tmp_path):
+        done, refreshes = self.run_job(tmp_path, with_image=True)
+        assert refreshes == [("3", "/data/music")]
+        assert 'Plex is scanning it into "Music"' in done["detail"]
+
+    def test_nothing_changed_asks_plex_nothing(self, tmp_path):
+        done, refreshes = self.run_job(tmp_path, with_image=False)
+        assert refreshes == [] and "Plex" not in done["detail"]

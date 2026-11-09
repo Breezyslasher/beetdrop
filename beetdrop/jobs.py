@@ -274,6 +274,10 @@ class JobManager:
                 log = (report + "\n\n" if report else "") + collector.text()
                 self._update(job_id, stage="done", progress=100.0,
                              detail=detail[:2000], log=log[:20000])
+                # Rewritten files - and converted ones above all - are only
+                # seen by Plex when it scans them.
+                if result.embedded or result.converted:
+                    self._tell_plex(job_id, config, config.music_root)
                 return
             if job["kind"] == "musicvideo":
                 # The video root is a subfolder we create on first use; make
