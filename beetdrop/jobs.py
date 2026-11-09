@@ -237,11 +237,23 @@ class JobManager:
                 if result.unusable:
                     extras.append("%d whose image is not JPEG or PNG" % result.unusable)
                 if result.failed:
-                    extras.append("%d could not be read or written" % result.failed)
+                    top, count = result.reasons.most_common(1)[0]
+                    extras.append("%d could not be read or written%s" % (
+                        result.failed, " - %d: %s" % (count, top)
+                        if count != result.failed else ": " + top))
                 if extras:
                     detail += " (" + ", ".join(extras) + ")"
+                if result.by_prefix:
+                    detail += "; %d matched to an image with a shortened name" % (
+                        result.by_prefix)
+                if result.no_image:
+                    detail += "; the log lists examples with no image"
+                # The report first: the per-file lines can run past the
+                # log's length limit, and the report is the useful part.
+                report = result.report()
+                log = (report + "\n\n" if report else "") + collector.text()
                 self._update(job_id, stage="done", progress=100.0,
-                             detail=detail[:2000], log=collector.text()[:20000])
+                             detail=detail[:2000], log=log[:20000])
                 return
             if job["kind"] == "musicvideo":
                 # The video root is a subfolder we create on first use; make

@@ -20,9 +20,12 @@ the old file or the new one, never half of each.
 
 from __future__ import annotations
 
+import errno
 import os
+import re
 import shutil
-from dataclasses import dataclass
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
@@ -47,6 +50,44 @@ class ArtBackfill:
     no_image: int = 0      # nothing beside it to embed
     unusable: int = 0      # an image MP4 cannot hold (WebP, say)
     failed: int = 0        # could not be read or written
+    by_prefix: int = 0     # of embedded: image found by a shortened name
+    # Why the failures failed, counted, so the card can say "permission
+    # denied" rather than only how many.
+    reasons: Counter = field(default_factory=Counter)
+    # A few videos with no image, and the images in the same folder that
+    # nothing claimed - enough to see what naming was not understood.
+    missing: list = field(default_factory=list)
+
+    def report(self) -> str:
+        lines = []
+        if self.reasons:
+            lines.append("Could not be read or written:")
+            lines += ["  %d - %s" % (n, why) for why, n in self.reasons.most_common()]
+        if self.missing:
+            lines.append("Examples with no image found:")
+            for name, images in self.missing:
+                lines.append("  %s" % name)
+                lines.append("    images in that folder: %s" % (
+                    ", ".join(images) if images else "none"))
+        return "\n".join(lines)
+
+
+MISSING_EXAMPLES = 8
+
+
+def _why(exc: BaseException, writing: bool) -> str:
+    """A failure in words a person can act on."""
+    if isinstance(exc, PermissionError):
+        return ("permission denied - Beetdrop cannot write in that folder"
+                if writing else "permission denied - Beetdrop cannot read it")
+    if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
+        return "the disk is full"
+    if isinstance(exc, OSError):
+        return "%s" % (exc.strerror or exc.__class__.__name__)
+    name = exc.__class__.__name__
+    if not writing or "MP4" in name or "Mutagen" in name:
+        return "not a readable MP4 (%s)" % name
+    return name
 
 
 def sidecar_image(video: Path) -> Optional[Path]:
@@ -111,42 +152,120 @@ def _noop(*args) -> None:
     pass
 
 
+def _key(text: str) -> str:
+    return re.sub(r"[^0-9a-z]", "", text.casefold())
+
+
+def _image_base(image: Path) -> str:
+    stem = image.stem
+    for suffix in IMAGE_SUFFIXES:
+        if suffix and stem.endswith(suffix):
+            return stem[:-len(suffix)]
+    return stem
+
+
+def _video_bases(video: Path) -> list:
+    bases = [video.stem]
+    for suffix in TYPE_SUFFIXES:
+        if video.stem.endswith(suffix) and len(video.stem) > len(suffix):
+            bases.append(video.stem[:-len(suffix)])
+            break
+    return bases
+
+
+def _by_prefix(videos: list, images: list) -> dict:
+    """Pair videos with images whose names were cut short - one name the
+    start of the other, as a tool that limits filename length leaves
+    them. Only one-to-one pairs count: an image that could belong to two
+    videos, or a video that could take two images, is left unpaired
+    rather than guessed. Eight letters or digits at least."""
+    def fits(video, image):
+        image_key = _key(_image_base(image))
+        for base in _video_bases(video):
+            video_key = _key(base)
+            if min(len(image_key), len(video_key)) >= 8 and (
+                    video_key.startswith(image_key) or image_key.startswith(video_key)):
+                return True
+        return False
+
+    pairs = {}
+    for video in videos:
+        options = [image for image in images if fits(video, image)]
+        if len(options) == 1 and sum(fits(v, options[0]) for v in videos) == 1:
+            pairs[video] = options[0]
+    return pairs
+
+
 def backfill_video_art(roots: Iterable[Path],
                        on_progress: Callable[[float], None] = _noop,
                        on_detail: Callable[[str], None] = _noop) -> ArtBackfill:
     result = ArtBackfill()
     videos = iter_videos(roots)
     result.total = len(videos)
-    for index, video in enumerate(videos):
-        on_progress(index / result.total * 100.0 if result.total else 100.0)
+    folders = defaultdict(list)
+    for video in videos:
+        folders[video.parent].append(video)
+
+    done = 0
+    for folder, here in folders.items():
         try:
-            if has_cover(video):
-                result.already += 1
-                continue
-        except Exception:
-            result.failed += 1
-            on_detail("could not read %s" % video.name)
-            continue
-        image = sidecar_image(video)
-        if image is None:
-            result.no_image += 1
-            continue
-        try:
-            data = image.read_bytes()
+            images = [p for p in folder.iterdir()
+                      if p.suffix.lower() in IMAGE_EXTS and p.is_file()]
         except OSError:
-            result.failed += 1
-            continue
-        mime = _image_kind(data)
-        if not mime:
-            result.unusable += 1
-            on_detail("%s is not a JPEG or PNG" % image.name)
-            continue
-        on_detail("embedding %s" % image.name)
-        try:
-            embed_cover(video, data, mime)
-            result.embedded += 1
-        except Exception as exc:
-            result.failed += 1
-            on_detail("could not write %s (%s)" % (video.name, str(exc)[:120]))
+            images = []
+        # Images some video in this folder is named for; never handed to
+        # another video by a looser match.
+        named_for = {image for video in here
+                     for image in [sidecar_image(video)] if image}
+        named_for |= {image for image in images
+                      if any(_key(_image_base(image)) == _key(base)
+                             for video in here for base in _video_bases(video))}
+
+        wanting = []
+        for video in here:
+            done += 1
+            on_progress((done - 1) / result.total * 100.0)
+            try:
+                if has_cover(video):
+                    result.already += 1
+                    continue
+            except Exception as exc:
+                result.failed += 1
+                result.reasons[_why(exc, writing=False)] += 1
+                on_detail("could not read %s (%s)" % (video.name, _why(exc, False)))
+                continue
+            wanting.append(video)
+
+        spare = [image for image in images if image not in named_for]
+        loose = _by_prefix([v for v in wanting if sidecar_image(v) is None], spare)
+        for video in wanting:
+            image = sidecar_image(video) or loose.get(video)
+            if image is None:
+                result.no_image += 1
+                if len(result.missing) < MISSING_EXAMPLES:
+                    result.missing.append((
+                        video.name, sorted(p.name for p in spare)[:6]))
+                continue
+            try:
+                data = image.read_bytes()
+            except OSError as exc:
+                result.failed += 1
+                result.reasons[_why(exc, writing=False)] += 1
+                continue
+            mime = _image_kind(data)
+            if not mime:
+                result.unusable += 1
+                on_detail("%s is not a JPEG or PNG" % image.name)
+                continue
+            on_detail("embedding %s" % image.name)
+            try:
+                embed_cover(video, data, mime)
+                result.embedded += 1
+                if video in loose:
+                    result.by_prefix += 1
+            except Exception as exc:
+                result.failed += 1
+                result.reasons[_why(exc, writing=True)] += 1
+                on_detail("could not write %s (%s)" % (video.name, _why(exc, True)))
     on_progress(100.0)
     return result

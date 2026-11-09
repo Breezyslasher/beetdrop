@@ -232,7 +232,7 @@
       <p v-else-if="j.stage === 'done' && j.kind !== 'lyricscan' && j.kind !== 'videoart'" class="handoff">
         Filed to library
       </p>
-      <details v-if="j.stage === 'failed' && j.log" class="joblog">
+      <details v-if="j.log && (j.stage === 'failed' || (j.stage === 'done' && j.kind === 'videoart'))" class="joblog">
         <summary>Log</summary>
         <pre>{{ j.log }}</pre>
       </details>

@@ -147,3 +147,58 @@ class TestTheJob:
         assert "embedded artwork in 1 of 2" in done["detail"]
         assert "1 with no image beside them" in done["detail"]
         assert has_cover(video)
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+class TestExplainingItself:
+    def test_a_shortened_image_name_is_paired(self, tmp_path):
+        # A tool that limits filename length cut the image's name short.
+        video = tmp_path / '02 Go!!! _Fighting Dreamers_ (From _Naruto_).mp4'
+        make_mp4(video)
+        (tmp_path / "02 Go!!! _Fighting Dreamers_ (From _-thumb.jpg").write_bytes(JPEG)
+        result = backfill_video_art([tmp_path])
+        assert (result.embedded, result.by_prefix) == (1, 1)
+        assert has_cover(video)
+
+    def test_a_shortened_name_that_fits_two_videos_is_not_guessed(self, tmp_path):
+        make_mp4(tmp_path / "01 Fighting Dreamers (TV Size).mp4")
+        make_mp4(tmp_path / "02 Fighting Dreamers (Full).mp4")
+        (tmp_path / "Fighting Dreamers-thumb.jpg").write_bytes(JPEG)
+        # Neither name starts with the other once the numbers differ, and
+        # with them equal it would fit both; either way, nothing is guessed.
+        make_mp4(tmp_path / "Fighting Dreamers (TV Size).mp4")
+        make_mp4(tmp_path / "Fighting Dreamers (Full).mp4")
+        result = backfill_video_art([tmp_path])
+        assert result.embedded == 0 and result.no_image == 4
+
+    def test_an_image_named_exactly_for_one_video_is_not_lent_to_another(self, tmp_path):
+        make_mp4(tmp_path / "01 - Song Title.mp4")
+        make_mp4(tmp_path / "01 - Song Title (Live).mp4")
+        (tmp_path / "01 - Song Title-thumb.jpg").write_bytes(JPEG)
+        result = backfill_video_art([tmp_path])
+        assert result.embedded == 1 and result.no_image == 1
+        assert not has_cover(tmp_path / "01 - Song Title (Live).mp4")
+
+    def test_the_misses_are_shown_with_the_images_beside_them(self, tmp_path):
+        make_mp4(tmp_path / "Some Video.mp4")
+        (tmp_path / "Completely Different Name.jpg").write_bytes(JPEG)
+        result = backfill_video_art([tmp_path])
+        assert result.missing == [("Some Video.mp4", ["Completely Different Name.jpg"])]
+        assert "images in that folder: Completely Different Name.jpg" in result.report()
+
+    def test_failures_say_why(self, tmp_path, monkeypatch):
+        import beetdrop.videoart as videoart
+
+        (tmp_path / "broken.mp4").write_bytes(b"not a video")
+        make_mp4(tmp_path / "locked.mp4")
+        (tmp_path / "locked-thumb.jpg").write_bytes(JPEG)
+
+        def denied(src, dst, **kwargs):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(videoart.shutil, "copy2", denied)
+        result = backfill_video_art([tmp_path])
+        assert result.failed == 2
+        assert result.reasons["permission denied - Beetdrop cannot write in that folder"] == 1
+        assert any(why.startswith("not a readable MP4") for why in result.reasons)
+        assert "permission denied" in result.report()

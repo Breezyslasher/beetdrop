@@ -182,7 +182,12 @@ such as `-video`. Videos that already have artwork are left alone, the
 images stay where they are, and each video is rewritten on a copy that
 replaces it in one step, so a pass that is stopped part-way leaves no
 half-written file. It runs on the Queue and says how many it embedded,
-how many had no image, and how many had an image MP4 cannot hold.
+how many had no image, and how many had an image MP4 cannot hold. An
+image whose name was cut short - one name the start of the other - is
+paired too, but only when it fits exactly one video. The finished job's
+log says why any failed (permission denied, not a readable MP4...) and
+lists a few videos with no image alongside the images in their folder,
+which shows a naming it does not understand yet.
 
 Finding the right video is strict on identity and loose on length. A
 wrong video beside a track is worse than none, because Plex presents it
