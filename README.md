@@ -152,16 +152,26 @@ disk. Max quality is set with `BEETDROP_VIDEO_MAX_HEIGHT` or in Settings.
 Plex is the other way round: it reads music videos inside a music
 library, as extras linked to the track they belong to. Tick **+ music
 video** on the Songs search and a grab also finds that song's video and
-files it in the album folder under the track's title with Plex's
+files it in the album folder, named for the audio file with Plex's
 `-video` suffix:
 
 ```
 Artist/Album (2013)/03 - Song.opus
-Artist/Album (2013)/Song-video.mp4
+Artist/Album (2013)/03 - Song-video.mp4
 ```
 
-It is named for the track's *title*, not its filename - Plex matches the
-title it shows, and the `03 - ` is only how Beetdrop names the audio.
+Plex's rule ("Adding Local Artist and Music Videos") is that the video
+must start with the track's exact filename and sit in the same folder;
+the suffix is what marks it as a music video, so a bare `03 - Song.mp4`
+is not one. Versions 0.65 to 0.67 named it for the title alone
+(`Song-video.mp4`), which Plex links to nothing; those are renamed once,
+in the background, the first time a newer version starts.
+
+The video's own YouTube thumbnail is embedded as its cover art - the
+full 1280x720 frame where YouTube has one, not the letterboxed 480x360
+default - for players that read embedded art (Kodi, Infuse, VLC, file
+browsers). Plex has no way to set artwork on a music video extra and
+draws its own thumbnail from a frame, so it may not show this one.
 
 Finding the right video is strict on identity and loose on length. A
 wrong video beside a track is worse than none, because Plex presents it
@@ -178,7 +188,7 @@ what happened to it. Tracks only - an album would mean a search per
 track, and most album tracks have no video. A grab that went to
 `_review/` gets none, because its title is YouTube's guess and will
 change when the match is fixed; fixing a match carries an existing video
-along and renames it for the new title. Stats counts these apart from the
+along and renames it for the new filename. Stats counts these apart from the
 Kodi-style library.
 
 The `-video` naming follows Plex's documented convention for music

@@ -283,10 +283,11 @@ class JobManager:
                         job_id, title=result.title, artist=result.artist_display),
                     logger=collector,
                 )
-                detail = ""
+                detail = outcome.note
                 if job.get("with_video"):
-                    detail = self._companion(job_id, config, outcome,
-                                             on_stage, on_progress, collector)
+                    video = self._companion(job_id, config, outcome,
+                                            on_stage, on_progress, collector)
+                    detail = "; ".join(part for part in (detail, video) if part)
                 self._update(job_id, stage="done", progress=100.0,
                              detail=detail[:2000],
                              log=collector.text()[:20000],

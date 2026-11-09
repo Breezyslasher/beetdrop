@@ -12,6 +12,7 @@ from beetdrop.companion import (
     grab_companion,
     pick_music_video,
     plex_video_filename,
+    rename_title_named,
 )
 from beetdrop.config import Config
 from beetdrop.fulltags import FullTags
@@ -48,17 +49,20 @@ SONG = dict(title="9 to 5", artist="Dolly Parton", duration=161)
 
 
 class TestThePlexName:
-    def test_it_is_the_title_with_the_video_suffix(self):
-        assert plex_video_filename("9 to 5") == "9 to 5-video.mp4"
+    # Plex links a video to a track when its name starts with the track's
+    # exact filename and ends in a type suffix, in the same folder.
+    def test_it_is_the_audio_filename_with_the_video_suffix(self):
+        assert plex_video_filename("01 - 9 to 5.opus") == "01 - 9 to 5-video.mp4"
 
-    def test_the_track_number_is_not_part_of_it(self):
-        # Plex matches the title it shows, and "03 - " is only how
-        # Beetdrop names the audio file.
-        assert not plex_video_filename("Jolene").startswith("0")
+    def test_a_disc_prefix_is_kept(self):
+        assert plex_video_filename("2-03 - Jolene.flac") == "2-03 - Jolene-video.mp4"
 
-    def test_a_title_that_is_not_a_safe_filename_is_made_one(self):
-        name = plex_video_filename("AC/DC: Back?")
-        assert "/" not in name and name.endswith("-video.mp4")
+    def test_an_unnumbered_track(self):
+        assert plex_video_filename("Jolene.opus") == "Jolene-video.mp4"
+
+    def test_the_suffix_is_never_left_off(self):
+        # A bare "01 - 9 to 5.mp4" is not read as a music video.
+        assert plex_video_filename("01 - 9 to 5.opus") != "01 - 9 to 5.mp4"
 
 
 class TestPickingTheVideo:
@@ -167,7 +171,7 @@ class TestGrabbingIt:
             search=lambda q: [video("Dolly Parton - 9 to 5 (Official Video)",
                                     seconds=175)],
             download=self.downloader(calls))
-        assert found.path == audio.parent / "9 to 5-video.mp4"
+        assert found.path == audio.parent / "01 - 9 to 5-video.mp4"
         assert found.path.is_file() and calls == ["v1"]
         # Nothing half-written or left in scratch.
         assert not list(audio.parent.glob(".*beetdrop-tmp"))
@@ -175,10 +179,10 @@ class TestGrabbingIt:
             (tmp_path / "scratch").iterdir())
 
     def test_a_track_that_already_has_one_is_left_alone(self, tmp_path):
-        # A second copy would be "9 to 5-video (2).mp4", which Plex reads
-        # as nothing; the first video stays and nothing is downloaded.
+        # A second copy would be "01 - 9 to 5-video (2).mp4", which Plex
+        # reads as nothing; the first video stays and nothing is downloaded.
         audio = library_track(tmp_path)
-        existing = audio.parent / "9 to 5-video.mp4"
+        existing = audio.parent / "01 - 9 to 5-video.mp4"
         existing.write_bytes(b"theirs")
         calls = []
         found = grab_companion(FakeConfig(tmp_path), audio, TAGS, RESULT,
@@ -186,6 +190,19 @@ class TestGrabbingIt:
                                download=self.downloader(calls))
         assert calls == [] and existing.read_bytes() == b"theirs"
         assert "already" in found.detail
+
+    def test_one_an_earlier_version_named_for_the_title_is_renamed(self, tmp_path):
+        # 0.65-0.67 filed "9 to 5-video.mp4", which Plex links to nothing.
+        audio = library_track(tmp_path)
+        (audio.parent / "9 to 5-video.mp4").write_bytes(b"old")
+        calls = []
+        found = grab_companion(FakeConfig(tmp_path), audio, TAGS, RESULT,
+                               search=lambda q: pytest.fail("searched anyway"),
+                               download=self.downloader(calls))
+        assert calls == []
+        assert (audio.parent / "01 - 9 to 5-video.mp4").read_bytes() == b"old"
+        assert not (audio.parent / "9 to 5-video.mp4").exists()
+        assert "renamed" in found.detail
 
     def test_no_match_downloads_nothing(self, tmp_path):
         audio = library_track(tmp_path)
@@ -218,34 +235,77 @@ class TestGrabbingIt:
                                     seconds=175)],
             download=broken)
         assert found.path is None and "403" in found.detail
-        assert not (audio.parent / "9 to 5-video.mp4").exists()
+        assert not (audio.parent / "01 - 9 to 5-video.mp4").exists()
         scratch = tmp_path / "scratch"
         assert not scratch.exists() or not any(scratch.iterdir())
 
 
 class TestCarryingItAlong:
-    def test_a_refiled_track_takes_its_video_under_the_new_title(self, tmp_path):
+    def test_a_refiled_track_takes_its_video_under_the_new_name(self, tmp_path):
         old_dir = tmp_path / "_review" / "Unknown - Some Song"
         new_dir = tmp_path / "Dolly Parton" / "9 to 5 and Odd Jobs (1980)"
         old_dir.mkdir(parents=True)
         (old_dir / "Some Song-video.mp4").write_bytes(b"clip")
-        moved = carry_companion(old_dir / "track.opus", "Some Song",
-                                new_dir / "01 - 9 to 5.opus", "9 to 5")
-        assert moved == new_dir / "9 to 5-video.mp4"
+        moved = carry_companion(old_dir / "Some Song.opus", "Some Song",
+                                new_dir / "01 - 9 to 5.opus")
+        assert moved == new_dir / "01 - 9 to 5-video.mp4"
         assert moved.read_bytes() == b"clip"
         assert not (old_dir / "Some Song-video.mp4").exists()
 
+    def test_one_named_for_the_old_title_is_found_too(self, tmp_path):
+        (tmp_path / "Some Song-video.mp4").write_bytes(b"clip")
+        moved = carry_companion(tmp_path / "track.opus", "Some Song",
+                                tmp_path / "01 - 9 to 5.opus")
+        assert moved == tmp_path / "01 - 9 to 5-video.mp4"
+
     def test_a_video_already_at_the_destination_is_not_overwritten(self, tmp_path):
-        (tmp_path / "Some Song-video.mp4").write_bytes(b"old")
-        (tmp_path / "9 to 5-video.mp4").write_bytes(b"chosen")
-        moved = carry_companion(tmp_path / "a.opus", "Some Song",
-                                tmp_path / "b.opus", "9 to 5")
+        (tmp_path / "a-video.mp4").write_bytes(b"old")
+        (tmp_path / "b-video.mp4").write_bytes(b"chosen")
+        moved = carry_companion(tmp_path / "a.opus", "A", tmp_path / "b.opus")
         assert moved is None
-        assert (tmp_path / "9 to 5-video.mp4").read_bytes() == b"chosen"
+        assert (tmp_path / "b-video.mp4").read_bytes() == b"chosen"
 
     def test_no_video_is_nothing_to_do(self, tmp_path):
-        assert carry_companion(tmp_path / "a.opus", "A",
-                               tmp_path / "b.opus", "B") is None
+        assert carry_companion(tmp_path / "a.opus", "A", tmp_path / "b.opus") is None
+
+
+class TestRenamingEarlierOnes:
+    def album(self, tmp_path, *names):
+        folder = tmp_path / "Artist" / "Album (1999)"
+        folder.mkdir(parents=True)
+        for name in names:
+            (folder / name).write_bytes(b"x")
+        return folder
+
+    def test_a_title_named_video_gets_its_tracks_name(self, tmp_path):
+        folder = self.album(tmp_path, "01 - Intro.opus", "02 - 9 to 5.opus",
+                            "9 to 5-video.mp4")
+        assert rename_title_named(tmp_path) == 1
+        assert (folder / "02 - 9 to 5-video.mp4").is_file()
+        assert not (folder / "9 to 5-video.mp4").exists()
+
+    def test_a_disc_numbered_track_too(self, tmp_path):
+        folder = self.album(tmp_path, "2-03 - Jolene.flac", "Jolene-video.mp4")
+        assert rename_title_named(tmp_path) == 1
+        assert (folder / "2-03 - Jolene-video.mp4").is_file()
+
+    def test_a_correctly_named_one_is_left_alone(self, tmp_path):
+        folder = self.album(tmp_path, "01 - Song.opus", "01 - Song-video.mp4",
+                            "Song.opus", "Song-video.mp4")
+        assert rename_title_named(tmp_path) == 0
+        assert sorted(p.name for p in folder.iterdir()) == [
+            "01 - Song-video.mp4", "01 - Song.opus", "Song-video.mp4", "Song.opus"]
+
+    def test_two_tracks_with_that_title_is_not_guessed(self, tmp_path):
+        folder = self.album(tmp_path, "01 - Song.opus", "2-01 - Song.opus",
+                            "Song-video.mp4")
+        assert rename_title_named(tmp_path) == 0
+        assert (folder / "Song-video.mp4").is_file()
+
+    def test_no_track_to_own_it_is_left_alone(self, tmp_path):
+        folder = self.album(tmp_path, "01 - Other.opus", "Song-video.mp4")
+        assert rename_title_named(tmp_path) == 0
+        assert (folder / "Song-video.mp4").is_file()
 
 
 class TestTheApi:
@@ -373,3 +433,116 @@ class TestTheJobRunsIt:
             done = self.finished(client, job["id"])
         assert self.asked == [] and done["stage"] == "done"
         assert "_review" in done["detail"]
+
+
+class TestRenamingOnStartup:
+    def test_it_runs_once_in_the_background(self, tmp_path, monkeypatch):
+        import time as _time
+
+        import beetdrop.companion as companion_module
+        from beetdrop.db import Store
+
+        music = tmp_path / "music"
+        folder = music / "Dolly Parton" / "9 to 5 and Odd Jobs (1980)"
+        folder.mkdir(parents=True)
+        (folder / "01 - 9 to 5.opus").write_bytes(b"x")
+        (folder / "9 to 5-video.mp4").write_bytes(b"clip")
+        config = Config(music_root=music, scratch_root=tmp_path / "s",
+                        config_dir=tmp_path / "c")
+        with TestClient(create_app(config)):
+            for _ in range(100):
+                if Store(config.db_path).get_settings().get("companion_names_v2"):
+                    break
+                _time.sleep(0.02)
+        assert (folder / "01 - 9 to 5-video.mp4").read_bytes() == b"clip"
+
+        walks = []
+        monkeypatch.setattr(companion_module, "rename_title_named",
+                            lambda root: walks.append(root) or 0)
+        with TestClient(create_app(config)):
+            _time.sleep(0.1)
+        assert walks == []
+
+
+JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 64
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+
+
+class TestArtwork:
+    def grab(self, tmp_path, fetch_art):
+        audio = library_track(tmp_path)
+
+        def download(video_id, scratch, **kwargs):
+            target = scratch / "out.mp4"
+            make_mp4(target)
+            return target
+
+        return grab_companion(
+            FakeConfig(tmp_path), audio, TAGS, RESULT,
+            search=lambda q: [video("Dolly Parton - 9 to 5 (Official Video)",
+                                    seconds=175)],
+            download=download, fetch_art=fetch_art)
+
+    def test_the_videos_own_thumbnail_is_embedded(self, tmp_path):
+        from mutagen.mp4 import MP4
+        asked = []
+        found = self.grab(tmp_path, lambda vid, url: asked.append(vid) or (JPEG, "image/jpeg"))
+        covers = MP4(str(found.path)).get("covr")
+        assert asked == ["v1"]
+        assert covers and bytes(covers[0]) == JPEG
+        # The track's tags are still there beside it.
+        assert MP4(str(found.path))["\xa9nam"] == ["9 to 5"]
+
+    def test_no_artwork_still_files_the_video_and_says_so(self, tmp_path):
+        found = self.grab(tmp_path, lambda vid, url: None)
+        assert found.path.is_file() and "without artwork" in found.detail
+
+    def test_a_failing_fetch_still_files_the_video(self, tmp_path):
+        def boom(vid, url):
+            raise RuntimeError("no network")
+        found = self.grab(tmp_path, boom)
+        assert found.path.is_file()
+
+
+class TestFetchingTheThumbnail:
+    class Response:
+        def __init__(self, status, content=b""):
+            self.status_code, self.content = status, content
+
+    def serve(self, monkeypatch, pages):
+        import beetdrop.companion as companion_module  # noqa: F401
+        import requests
+        asked = []
+
+        def get(url, **kwargs):
+            asked.append(url)
+            return pages.get(url, self.Response(404))
+
+        monkeypatch.setattr(requests, "get", get)
+        return asked
+
+    MAXRES = "https://i.ytimg.com/vi/abc/maxresdefault.jpg"
+    HQ720 = "https://i.ytimg.com/vi/abc/hq720.jpg"
+    DEFAULT = "https://i.ytimg.com/vi/abc/hqdefault.jpg?sqp=1"
+
+    def test_the_full_size_frame_comes_first(self, monkeypatch):
+        from beetdrop.companion import fetch_thumbnail
+        asked = self.serve(monkeypatch, {self.MAXRES: self.Response(200, JPEG),
+                                         self.DEFAULT: self.Response(200, PNG)})
+        assert fetch_thumbnail("abc", self.DEFAULT) == (JPEG, "image/jpeg")
+        assert asked == [self.MAXRES]
+
+    def test_a_missing_one_falls_through_to_the_next(self, monkeypatch):
+        # A missing maxresdefault is a 404 that still carries an image.
+        from beetdrop.companion import fetch_thumbnail
+        asked = self.serve(monkeypatch, {self.MAXRES: self.Response(404, JPEG),
+                                         self.DEFAULT: self.Response(200, PNG)})
+        assert fetch_thumbnail("abc", self.DEFAULT) == (PNG, "image/png")
+        assert asked == [self.MAXRES, self.HQ720, self.DEFAULT]
+
+    def test_an_image_mp4_cannot_hold_is_skipped(self, monkeypatch):
+        from beetdrop.companion import fetch_thumbnail
+        webp = b"RIFF\x00\x00\x00\x00WEBPVP8 "
+        self.serve(monkeypatch, {self.MAXRES: self.Response(200, webp),
+                                 self.HQ720: self.Response(200, b"<html>")})
+        assert fetch_thumbnail("abc", "") is None
