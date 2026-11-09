@@ -203,14 +203,25 @@ and the job log says why.
 
 For videos with no image and no link, **Search YouTube for them, then
 embed artwork** searches YouTube for each by its name - without a
-leading "07 - " or a Plex suffix - and takes a result's thumbnail only
-when both hold: the title says the same thing once brackets and
-punctuation are set aside (with or without the result's artist in
-front), and the length matches the file's own to within 2.5 seconds.
+leading "07 - ", with a "-Video" suffix dropped and a "-Lyric" one read
+as "(Lyrics)", and with a bracket a length limit cut off ("[Official A")
+closed rather than lost. A result's thumbnail is taken only when all of
+these hold:
+
+- the same kind of upload: a live, remix or "Version 3" cut, or a
+  lyric, audio or visualizer upload, only for a file whose name says the
+  same - otherwise the picture is of something else;
+- the title says the same thing (90%+) once brackets, punctuation and
+  labels like "Official Video" are set aside, with or without the
+  result's artist in front;
+- the length is the file's own: within 2.5 seconds, or 10 when the
+  title is as good as identical (another upload of the same video).
+
 Of several that pass, the closest in length. Anything less certain is
-skipped, and the log lists a few of those with the closest result and
-what ruled it out. One search a second; after five failed searches in
-a row it stops searching, since YouTube is refusing, and says so.
+skipped, and the log lists a few with the closest result and what ruled
+it out. Artwork found this way is marked in the file's tags. One search
+a second; after five failed searches in a row it stops, since YouTube is
+refusing, and says so.
 
 Finding the right video is strict on identity and loose on length. A
 wrong video beside a track is worse than none, because Plex presents it

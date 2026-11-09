@@ -245,9 +245,10 @@ def remux_to_mp4(video: Path) -> None:
         temp.unlink(missing_ok=True)
 
 
-def embed_cover(video: Path, data: bytes, mime: str) -> None:
-    """Embed `data` as `video`'s cover art, via a copy that replaces it."""
-    from mutagen.mp4 import MP4, MP4Cover
+def embed_cover(video: Path, data: bytes, mime: str, mark: str = "") -> None:
+    """Embed `data` as `video`'s cover art, via a copy that replaces it.
+    `mark` records where artwork that was searched for came from."""
+    from mutagen.mp4 import MP4, MP4Cover, MP4FreeForm
 
     temp = video.with_name(".%s.beetdrop-tmp" % video.name)
     try:
@@ -257,6 +258,8 @@ def embed_cover(video: Path, data: bytes, mime: str) -> None:
             tagged.add_tags()
         fmt = MP4Cover.FORMAT_PNG if mime == "image/png" else MP4Cover.FORMAT_JPEG
         tagged.tags["covr"] = [MP4Cover(data, imageformat=fmt)]
+        if mark:
+            tagged.tags[SEARCH_MARK] = [MP4FreeForm(mark.encode("utf-8"))]
         tagged.save()
         os.replace(temp, video)
     finally:
@@ -284,55 +287,127 @@ def _noop(*args) -> None:
     pass
 
 
-_TRACK_NUMBER = re.compile(r"^\s*(?:\d+-)?\d{1,3}\s*[-.]\s+")
+# "07 - ", "2-03 - ", "07. " - and "01 " with a leading zero, which no
+# title starts with; "99 Luftballons" keeps its 99.
+_TRACK_NUMBER = re.compile(r"^\s*(?:(?:\d+-)?\d{1,3}\s*[-.]\s+|0\d\s+)")
+# Plex type suffixes and the like, however spelled ("-Video", "-Lyric"),
+# hyphen against the name as Plex writes them - " - Live" with spaces is
+# part of a title, and stays. Those that say what kind of video it is
+# become words the matching understands, rather than vanishing.
+_TYPE_TAIL = re.compile(
+    r"(?<=\S)-(video|lyrics?|live|behindthescenes|concert|interview|"
+    r"featurette|other)\s*$", re.IGNORECASE)
+_TAIL_AS_WORDS = {"lyric": " (Lyrics)", "lyrics": " (Lyrics)", "live": " (Live)",
+                  "concert": " (Live)"}
+# A name cut short mid-bracket: "Galway Girl [Official A".
+_OPEN_TAIL = re.compile(r"\s*[\[(][^\])]*$")
 # A downloaded video is the same stream YouTube serves, so its length
 # agrees to the second; this allows for rounding and container padding.
 LENGTH_SLACK = 2.5
+# With the title as good as identical, another upload of the same video
+# - a few seconds of logo or silence either way - is still its picture.
+NEAR_IDENTICAL = 0.97
+LENGTH_SLACK_NEAR_IDENTICAL = 10.0
 TITLE_AT_LEAST = 0.9
 SEARCH_PAUSE = 1.0
 GIVE_UP_AFTER = 5     # searches failing in a row: YouTube is refusing
+# Written into a video whose artwork came from a search, so a later run
+# can tell it from artwork a person or another tool put there.
+SEARCH_MARK = "----:com.beetdrop:artwork"
+
+
+def _close_bracket(match) -> str:
+    text = match.group(0).rstrip()
+    return text + ("]" if "[" in text else ")")
 
 
 def search_query(video: Path) -> str:
     """What to search YouTube for: the name, without the "07 - " a
-    library adds or a Plex type suffix."""
-    stem = _video_bases(video)[-1]
+    library adds, a type suffix like "-Video", or a bracket a length
+    limit cut off part-way."""
+    # A bracket a length limit cut off is closed, not dropped: what is in
+    # it ("[Official Audio") still says what kind of upload this is, and
+    # the title comparison sets bracketed words aside anyway.
+    stem = _OPEN_TAIL.sub(_close_bracket, video.stem)
+    stem = _TYPE_TAIL.sub(
+        lambda m: _TAIL_AS_WORDS.get(m.group(1).lower(), ""), stem)
+    stem = _OPEN_TAIL.sub(_close_bracket, stem)
     return _TRACK_NUMBER.sub("", stem).strip()
+
+
+# Words that label an upload rather than name the song; set aside when
+# comparing titles, wherever they stand. What kind of upload it is gets
+# checked on its own (_flavour), so nothing is lost by it.
+_LABELS = re.compile(
+    r"\b(?:official|music video|lyric video|video|audio|lyrics?|hd|hq|4k|"
+    r"visuali[sz]er|mv)\b")
+
+
+def _plain(title: str) -> str:
+    from .matching import base_title
+    words = _LABELS.sub(" ", base_title(title))
+    return re.sub(r"\s+", " ", words).strip() or base_title(title)
+
+
+def _flavour(title: str) -> tuple:
+    """What kind of upload a title says it is: its live/remix/version
+    qualifiers, and whether it is a lyric, audio or visualizer upload."""
+    from .companion import _NOT_A_MUSIC_VIDEO
+    from .matching import normalize, significant_qualifiers
+    return (frozenset(significant_qualifiers(title)),
+            bool(_NOT_A_MUSIC_VIDEO.search(normalize(title))))
 
 
 def match_on_youtube(query: str, length: float, candidates: list) -> tuple:
     """(the result to take, or None; a line on the closest one).
 
-    Both must hold, or nothing is taken: the title says the same thing
-    once brackets and punctuation are set aside - checked against the
-    video's title alone and with its artist in front, since a filename
-    is usually "Artist - Title (Official Video)" - and the length is the
-    file's own, to the couple of seconds. Of several that pass, the
-    closest in length.
+    All must hold, or nothing is taken:
+    - the same kind of upload: a live, remix or "Version 3" cut, or a
+      lyric, audio or visualizer upload, only for a file whose name says
+      the same - otherwise its picture is of something else;
+    - the title says the same thing once brackets and punctuation are
+      set aside - against the video's title alone and with its artist in
+      front, since a filename is usually "Artist - Title (Official Video)";
+    - the length is the file's own: to 2.5 seconds, or 10 when the title
+      is as good as identical.
+    Of several that pass, the closest in length.
     """
     from .companion import _ratio
-    from .matching import base_title
 
-    want = base_title(query)
+    want = _plain(query)
+    want_flavour = _flavour(query)
     best, best_gap, closest, closest_score = None, None, "", None
     for candidate in candidates:
-        names = [candidate.raw_title or candidate.title, candidate.title]
+        raw = candidate.raw_title or candidate.title
+        names = [raw, candidate.title]
         for artist in candidate.artists[:2]:
             names += ["%s - %s" % (artist, n) for n in names[:2]]
-        title_score = max(_ratio(base_title(n), want) for n in names if n)
+        title_score = max(_ratio(_plain(n), want) for n in names if n)
         gap = (abs(candidate.duration_seconds - length)
                if candidate.duration_seconds and length else None)
-        if title_score >= TITLE_AT_LEAST and gap is not None and gap <= LENGTH_SLACK:
+        flavour = _flavour(raw)
+        slack = (LENGTH_SLACK_NEAR_IDENTICAL if title_score >= NEAR_IDENTICAL
+                 else LENGTH_SLACK)
+        if (flavour == want_flavour and title_score >= TITLE_AT_LEAST
+                and gap is not None and gap <= slack):
             if best_gap is None or gap < best_gap:
                 best, best_gap = candidate, gap
             continue
         score = title_score - (min(gap, 60) / 60 if gap is not None else 1)
         if closest_score is None or score > closest_score:
             closest_score = score
-            closest = '"%s" - title %.0f%% alike, %s' % (
-                candidate.raw_title or candidate.title, title_score * 100,
+            why = []
+            if flavour[0] != want_flavour[0]:
+                why.append("a different version (%s)" % (
+                    ", ".join(sorted(flavour[0] ^ want_flavour[0]))))
+            if flavour[1] != want_flavour[1]:
+                why.append("a lyric/audio upload" if flavour[1]
+                           else "not a lyric/audio upload")
+            closest = '"%s" - title %.0f%% alike, %s%s' % (
+                raw, title_score * 100,
                 "length %+.0fs" % (candidate.duration_seconds - length)
-                if gap is not None else "length unknown")
+                if gap is not None else "length unknown",
+                ", " + ", ".join(why) if why else "")
     return best, closest or "no results"
 
 
@@ -518,7 +593,8 @@ def backfill_video_art(roots: Iterable[Path],
                         on_detail("embedding the thumbnail of %s" % (
                             found.raw_title or found.title))
                         try:
-                            embed_cover(video, *art)
+                            embed_cover(video, *art, mark="youtube search: %s %s" % (
+                                found.video_id, found.raw_title or found.title))
                             result.embedded += 1
                             result.from_search += 1
                         except Exception as exc:

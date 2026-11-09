@@ -519,3 +519,96 @@ class TestTheJobOptions:
         assert videoart_title(True, True) == (
             "Convert WebM/MKV and search YouTube, then embed music video artwork")
         assert videoart_title(False, False) == "Embed music video artwork"
+
+
+class TestYourLibrary:
+    """Cases from a real run: each was wrongly taken or wrongly skipped."""
+
+    def match(self, filename, length, title, seconds, artists=("Ed Sheeran",)):
+        from beetdrop.videoart import match_on_youtube, search_query
+        return match_on_youtube(search_query(Path(filename)), length,
+                                [yt(title, seconds, artists)])
+
+    # Wrongly taken before: a picture of something else.
+    def test_a_live_session_is_not_the_music_video(self):
+        found, closest = self.match(
+            "My Chemical Romance - Helena [Official Music Video].mp4", 210.0,
+            "Helena (Live for BBC Radio 1's \"The Lock Up\", 2005)", 211,
+            ("My Chemical Romance",))
+        assert found is None and "a different version (live)" in closest
+
+    def test_a_lyric_video_is_not_the_video(self):
+        found, closest = self.match(
+            "Weezer - Pork And Beans (Closed Captioned).mp4", 190.0,
+            "Weezer - Pork and Beans [Lyrics]", 190, ("Weezer",))
+        assert found is None and "lyric/audio upload" in closest
+
+    def test_a_numbered_version_is_not_a_remaster(self):
+        found, _ = self.match("Weezer - Say It Ain't So (Version 3).mp4", 258.0,
+                              "Say It Ain't So (2024 Remaster)", 258, ("Weezer",))
+        assert found is None
+
+    # Wrongly skipped before.
+    def test_another_upload_a_few_seconds_off_with_the_same_title(self):
+        found, _ = self.match("11 - Ed Sheeran - Thinking Out Loud.mp4", 288.0,
+                              "Thinking out Loud", 281)
+        assert found is not None
+
+    def test_an_audio_upload_for_a_file_that_is_one(self):
+        found, _ = self.match("Ed Sheeran - Happier [Official Audio.mp4", 215.0,
+                              "Ed Sheeran   Happier Official Audio", 207)
+        assert found is not None
+
+    def test_a_name_cut_off_mid_bracket(self):
+        found, _ = self.match("Ed Sheeran - Galway Girl [Official A.mp4", 170.0,
+                              "Galway Girl", 171)
+        assert found is not None
+        found, _ = self.match("Ed Sheeran - Perfect [Official Audio.mp4", 263.0,
+                              "Perfect", 265)
+        assert found is None    # an audio file against an ordinary video
+        found, _ = self.match("Ed Sheeran - Perfect [Official Video.mp4", 263.0,
+                              "Perfect", 265)
+        assert found is not None
+
+    # Rightly skipped, and still are.
+    def test_too_far_off_stays_skipped(self):
+        assert self.match("Crocodile Rock (Remastered).mp4", 240.0,
+                          "Crocodile Rock(Remastered)", 251, ("Elton John",))[0] is None
+        assert self.match("Elton John - Bennie and the Jets.mp4", 362.0,
+                          "Elton John - Bennie and the Jets", 323, ("Elton John",))[0] is None
+        assert self.match("07 - Caleb Hyles - Idolize.mp4", 200.0,
+                          "CALEB HYLES COVER ▶ Idolize", 203, ("Caleb Hyles",))[0] is None
+
+    def test_names_are_cleaned_for_searching(self):
+        from beetdrop.videoart import search_query
+        assert search_query(Path("Weezer - Thank God For Girls-Video.mp4")) == \
+            "Weezer - Thank God For Girls"
+        assert search_query(Path("Weezer - Thank God for Girls-Lyric.mp4")) == \
+            "Weezer - Thank God for Girls (Lyrics)"
+        assert search_query(Path("01 We Are-lyrics.mp4")) == "We Are (Lyrics)"
+        assert search_query(Path("Ed Sheeran - Galway Girl [Official A.mp4")) == \
+            "Ed Sheeran - Galway Girl [Official A]"
+        assert search_query(Path("99 Luftballons.mp4")) == "99 Luftballons"
+        assert search_query(Path("Artist - Song - Live.mp4")) == "Artist - Song - Live"
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+def test_artwork_found_by_searching_is_marked(tmp_path):
+    from mutagen.mp4 import MP4
+
+    from beetdrop.videoart import SEARCH_MARK
+    video = tmp_path / "Song.mp4"
+    make_mp4(video)
+    backfill_video_art([tmp_path], search=lambda q: [yt("Song", 1, vid="eeeeeeeeeee")],
+                       fetch_art=lambda vid, url: (JPEG, "image/jpeg"),
+                       sleep=lambda s: None)
+    assert bytes(MP4(str(video))[SEARCH_MARK][0]).startswith(b"youtube search: eeeeeeeeeee")
+
+
+def test_labels_are_set_aside_but_song_words_are_not():
+    from beetdrop.videoart import match_on_youtube
+    # "Full Moon" is not "Moon", and "Music" is a title, not a label.
+    assert match_on_youtube("The Black Ghosts - Full Moon", 200.0,
+                            [yt("Moon", 200, ("The Black Ghosts",))])[0] is None
+    assert match_on_youtube("Madonna - Music (Official Music Video)", 225.0,
+                            [yt("Music", 225, ("Madonna",))])[0] is not None
