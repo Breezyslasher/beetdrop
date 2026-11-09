@@ -189,6 +189,12 @@ log says why any failed (permission denied, not a readable MP4...) and
 lists a few videos with no image alongside the images in their folder,
 which shows a naming it does not understand yet.
 
+A video with no image beside it but a YouTube link in its tags - yt-dlp's
+`--embed-metadata` writes one into the comment - or a yt-dlp style
+`[videoid]` at the end of its name gets that video's own thumbnail
+fetched instead. A WebM or Matroska file named `.mp4` is reported as
+such: it plays, but has no place for MP4 cover art.
+
 Finding the right video is strict on identity and loose on length. A
 wrong video beside a track is worse than none, because Plex presents it
 as that song, so anything that is not the same recording by the same

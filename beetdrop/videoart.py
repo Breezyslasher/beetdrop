@@ -8,7 +8,9 @@ picture as a separate image beside them instead:
     02 Go!!! (From Naruto)-video-thumb.jpg     or -thumb.jpg, -poster.jpg, .jpg
 
 Players that read embedded art (Kodi, Infuse, VLC, file browsers) do not
-look for those. This copies the image into the video, once: a video that
+look for those. This copies the image into the video, once - or, with
+no image but a YouTube link in its tags (yt-dlp's --embed-metadata
+writes one), fetches that video's own thumbnail: a video that
 already has embedded art is left alone, and the image file is kept,
 since what reads it still does.
 
@@ -29,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
-from .companion import _image_kind
+from .companion import _image_kind, fetch_thumbnail
 
 VIDEO_EXTS = (".mp4", ".m4v")
 IMAGE_EXTS = (".jpg", ".jpeg", ".png")
@@ -51,6 +53,9 @@ class ArtBackfill:
     unusable: int = 0      # an image MP4 cannot hold (WebP, say)
     failed: int = 0        # could not be read or written
     by_prefix: int = 0     # of embedded: image found by a shortened name
+    from_youtube: int = 0  # of embedded: thumbnail fetched by the link in its tags
+    no_thumbnail: int = 0  # had a YouTube link, but no thumbnail could be fetched
+    not_mp4: int = 0       # WebM or Matroska named .mp4: cannot hold MP4 art
     # Why the failures failed, counted, so the card can say "permission
     # denied" rather than only how many.
     reasons: Counter = field(default_factory=Counter)
@@ -108,9 +113,46 @@ def sidecar_image(video: Path) -> Optional[Path]:
 
 
 def has_cover(video: Path) -> bool:
+    return _inspect(video)[0]
+
+
+# yt-dlp's --embed-metadata writes the page URL into the comment tag
+# (\xa9cmt); a link to the video in any tag will do. Its default filename
+# ends in " [<id>]".
+_YT_LINK = re.compile(
+    r"(?:youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|embed/)|youtu\.be/)"
+    r"([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])")
+_YT_IN_NAME = re.compile(r"\[([A-Za-z0-9_-]{11})\]$")
+
+
+def youtube_id(video: Path, tags=None) -> str:
+    """The YouTube video this file came from, when it says so."""
+    for values in (tags or {}).values():
+        for value in values if isinstance(values, list) else [values]:
+            if isinstance(value, str):
+                found = _YT_LINK.search(value)
+                if found:
+                    return found.group(1)
+    found = _YT_IN_NAME.search(video.stem)
+    return found.group(1) if found else ""
+
+
+def _inspect(video: Path) -> tuple:
+    """(has embedded art, YouTube id from its tags or name)."""
     from mutagen.mp4 import MP4
     tags = MP4(str(video)).tags
-    return bool(tags and tags.get("covr"))
+    return bool(tags and tags.get("covr")), youtube_id(video, tags)
+
+
+_MATROSKA = b"\x1a\x45\xdf\xa3"
+
+
+def _is_matroska(video: Path) -> bool:
+    try:
+        with open(video, "rb") as handle:
+            return handle.read(4) == _MATROSKA
+    except OSError:
+        return False
 
 
 def embed_cover(video: Path, data: bytes, mime: str) -> None:
@@ -198,7 +240,8 @@ def _by_prefix(videos: list, images: list) -> dict:
 
 def backfill_video_art(roots: Iterable[Path],
                        on_progress: Callable[[float], None] = _noop,
-                       on_detail: Callable[[str], None] = _noop) -> ArtBackfill:
+                       on_detail: Callable[[str], None] = _noop,
+                       fetch_art: Callable = fetch_thumbnail) -> ArtBackfill:
     result = ArtBackfill()
     videos = iter_videos(roots)
     result.total = len(videos)
@@ -221,15 +264,21 @@ def backfill_video_art(roots: Iterable[Path],
                       if any(_key(_image_base(image)) == _key(base)
                              for video in here for base in _video_bases(video))}
 
-        wanting = []
+        wanting, linked = [], {}
         for video in here:
             done += 1
             on_progress((done - 1) / result.total * 100.0)
             try:
-                if has_cover(video):
+                covered, linked[video] = _inspect(video)
+                if covered:
                     result.already += 1
                     continue
             except Exception as exc:
+                if _is_matroska(video):
+                    # Not damaged: a WebM or MKV someone named .mp4. It
+                    # plays, but has no place for MP4 cover art.
+                    result.not_mp4 += 1
+                    continue
                 result.failed += 1
                 result.reasons[_why(exc, writing=False)] += 1
                 on_detail("could not read %s (%s)" % (video.name, _why(exc, False)))
@@ -240,6 +289,26 @@ def backfill_video_art(roots: Iterable[Path],
         loose = _by_prefix([v for v in wanting if sidecar_image(v) is None], spare)
         for video in wanting:
             image = sidecar_image(video) or loose.get(video)
+            if image is None and linked.get(video):
+                # Nothing beside it, but it says which YouTube video it
+                # is: that video's own thumbnail, as new grabs embed.
+                try:
+                    art = fetch_art(linked[video], "")
+                except Exception:
+                    art = None
+                if not art:
+                    result.no_thumbnail += 1
+                    continue
+                data, mime = art
+                on_detail("embedding YouTube's thumbnail for %s" % video.name)
+                try:
+                    embed_cover(video, data, mime)
+                    result.embedded += 1
+                    result.from_youtube += 1
+                except Exception as exc:
+                    result.failed += 1
+                    result.reasons[_why(exc, writing=True)] += 1
+                continue
             if image is None:
                 result.no_image += 1
                 if len(result.missing) < MISSING_EXAMPLES:
