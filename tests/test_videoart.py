@@ -283,3 +283,66 @@ class TestNotReallyMp4:
         result = backfill_video_art([tmp_path])
         assert (result.not_mp4, result.failed) == (1, 0)
         assert (tmp_path / "x.mp4").read_bytes() == before
+
+
+def make_matroska(path: Path, vcodec="libvpx-vp9", acodec="libopus", fmt="webm",
+                  comment=""):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    extra = ["-pix_fmt", "yuv420p"] if vcodec == "libx264" else []
+    meta = ["-metadata", "comment=" + comment] if comment else []
+    subprocess.run(
+        ["ffmpeg", "-f", "lavfi", "-i", "color=c=black:s=16x16:d=2",
+         "-f", "lavfi", "-i", "sine=duration=2", "-shortest",
+         "-c:v", vcodec, *extra, "-c:a", acodec, *meta, "-f", fmt, str(path),
+         "-y", "-loglevel", "error"],
+        check=True, timeout=60)
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+class TestConvertingWebmNamedMp4:
+    def test_it_is_only_done_when_asked(self, tmp_path):
+        make_matroska(tmp_path / "x.mp4")
+        (tmp_path / "x-thumb.jpg").write_bytes(JPEG)
+        before = (tmp_path / "x.mp4").read_bytes()
+        result = backfill_video_art([tmp_path])
+        assert (result.not_mp4, result.converted) == (1, 0)
+        assert (tmp_path / "x.mp4").read_bytes() == before
+
+    def test_converted_then_given_its_artwork(self, tmp_path):
+        from mutagen.mp4 import MP4
+        video = tmp_path / "Song (Official Video).mp4"
+        make_matroska(video)
+        video.with_name("Song (Official Video)-thumb.jpg").write_bytes(JPEG)
+        result = backfill_video_art([tmp_path], convert=True)
+        assert (result.not_mp4, result.converted, result.embedded) == (1, 1, 1)
+        tagged = MP4(str(video))                     # a real MP4 now
+        assert bytes(tagged["covr"][0]) == JPEG
+        assert 1.5 < tagged.info.length < 2.5        # the whole thing
+        assert sorted(p.name for p in tmp_path.iterdir()) == [
+            "Song (Official Video)-thumb.jpg", "Song (Official Video).mp4"]
+
+    def test_its_youtube_link_survives_and_is_used(self, tmp_path):
+        video = tmp_path / "v.mp4"
+        make_matroska(video, comment="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        asked = []
+        result = backfill_video_art(
+            [tmp_path], convert=True,
+            fetch_art=lambda vid, url: asked.append(vid) or (JPEG, "image/jpeg"))
+        assert asked == ["dQw4w9WgXcQ"] and result.from_youtube == 1
+
+    def test_mkv_with_h264_converts_too(self, tmp_path):
+        make_matroska(tmp_path / "m.mp4", vcodec="libx264", acodec="aac", fmt="matroska")
+        result = backfill_video_art([tmp_path], convert=True)
+        assert result.converted == 1 and has_cover(tmp_path / "m.mp4") is False
+
+    def test_vorbis_audio_is_left_as_it_is(self, tmp_path):
+        # It would go into an MP4, then play in few players.
+        video = tmp_path / "old.mp4"
+        make_matroska(video, acodec="libvorbis")
+        before = video.read_bytes()
+        result = backfill_video_art([tmp_path], convert=True)
+        assert result.converted == 0
+        assert video.read_bytes() == before
+        assert any("vorbis" in why for why in result.left)
+        assert "WebM/MKV left as they were" in result.report()
+        assert not [p for p in tmp_path.iterdir() if p.name.startswith(".")]

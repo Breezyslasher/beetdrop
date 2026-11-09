@@ -627,10 +627,26 @@
       the image files stay where they are.
     </p>
     <div class="jobactions">
-      <button type="button" @click="embedVideoArt" :disabled="embeddingArt">
+      <button type="button" @click="embedVideoArt(false)" :disabled="embeddingArt">
         {{ embeddingArt ? 'Starting...' : 'Embed artwork into music videos' }}
       </button>
     </div>
+    <details class="explain">
+      <summary>Some are WebM or MKV named .mp4?</summary>
+      <p class="note">
+        Those play, but have no place for MP4 artwork. This converts each
+        into the real MP4 its name says it is, then embeds the artwork.
+        Nothing is re-encoded: the video and audio are copied as they are
+        and the name stays the same, so Plex sees the same file. Subtitles
+        stored inside are dropped. A file whose sound or picture would not
+        play well as MP4 (Vorbis audio, say) is left as it is.
+      </p>
+      <div class="jobactions">
+        <button type="button" @click="embedVideoArt(true)" :disabled="embeddingArt">
+          Convert them, then embed artwork
+        </button>
+      </div>
+    </details>
 
     <h3>Lyrics</h3>
     <div class="jobactions">

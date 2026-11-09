@@ -4,5 +4,5 @@ cover art - straight into a music library. Standalone: no beets, no
 external tagger.
 """
 
-__version__ = "0.69.2"
+__version__ = "0.70.0"
 APP_NAME = "beetdrop"
