@@ -321,6 +321,21 @@ def _close_bracket(match) -> str:
     return text + ("]" if "[" in text else ")")
 
 
+_NUMBER_ONLY = re.compile(r"^\s*\d{1,3}\s+(?=\S)")
+
+
+def _numbered_folder(video: Path) -> bool:
+    """Do the other files beside it start with a number and a space, as
+    an album's tracks do ("10 FAITH", "11 A to Z")? Then a number in
+    front of this one is a track number too, not part of its title -
+    "99 Luftballons" alone in a folder keeps its 99."""
+    try:
+        others = [p.name for p in video.parent.iterdir() if p != video]
+    except OSError:
+        return False
+    return sum(1 for name in others if _NUMBER_ONLY.match(name)) >= 2
+
+
 def search_query(video: Path) -> str:
     """What to search YouTube for: the name, without the "07 - " a
     library adds, a type suffix like "-Video", or a bracket a length
@@ -332,7 +347,50 @@ def search_query(video: Path) -> str:
     stem = _TYPE_TAIL.sub(
         lambda m: _TAIL_AS_WORDS.get(m.group(1).lower(), ""), stem)
     stem = _OPEN_TAIL.sub(_close_bracket, stem)
-    return _TRACK_NUMBER.sub("", stem).strip()
+    stem = _TRACK_NUMBER.sub("", stem).strip()
+    if _numbered_folder(video):
+        stem = _NUMBER_ONLY.sub("", stem).strip()
+    return stem
+
+
+def video_artist(video: Path, roots: Iterable[Path] = ()) -> str:
+    """Who a video is by, when its name does not say: its own tags, the
+    tags of the track named like it beside it, or the artist folder it
+    is filed under (the first folder below the music folder)."""
+    try:
+        from mutagen.mp4 import MP4
+        tags = MP4(str(video)).tags or {}
+        for key in ("\xa9ART", "aART"):
+            if tags.get(key) and str(tags[key][0]).strip():
+                return str(tags[key][0]).strip()
+    except Exception:
+        pass
+    try:
+        from .backfill import AUDIO_EXTS, read_track_meta
+        for ext in AUDIO_EXTS:
+            song = video.with_suffix(ext)
+            if song.is_file():
+                meta = read_track_meta(song)
+                if meta and meta[0]:
+                    return meta[0]
+    except Exception:
+        pass
+    for root in roots:
+        try:
+            relative = video.resolve().relative_to(root.resolve())
+        except (ValueError, OSError):
+            continue
+        if len(relative.parts) >= 2:
+            return relative.parts[0]
+    return ""
+
+
+def with_artist(query: str, artist: str) -> str:
+    """The query with the artist in front, unless it already names them."""
+    from .matching import normalize
+    if not artist or normalize(artist) in normalize(query):
+        return query
+    return "%s - %s" % (artist, query)
 
 
 # Words that label an upload rather than name the song; set aside when
@@ -358,53 +416,97 @@ def _flavour(title: str) -> tuple:
             bool(_NOT_A_MUSIC_VIDEO.search(normalize(title))))
 
 
-def match_on_youtube(query: str, length: float, candidates: list) -> tuple:
+# A file this close in length is that upload, to the second.
+EXACT_LENGTH = 1.0
+
+
+def _same_kind(want: tuple, got: tuple, gap: Optional[float]) -> bool:
+    """Is the result the same kind of upload as the file?
+
+    Lyric/audio uploads never pass for a video or the other way round -
+    a lyric video runs exactly as long as the song. A live, remix, cover
+    or numbered version only for a file whose name says the same. The one
+    allowance: a bare "(Long Version)", "(Dirty Version)" on the result's
+    side when its length is the file's to the second - that is the same
+    upload, labelled. A version the file's own name asks for ("Version
+    3") is still required.
+    """
+    if want[1] != got[1]:
+        return False
+    if want[0] == got[0]:
+        return True
+    extra, missing = got[0] - want[0], want[0] - got[0]
+    return (not missing and extra <= {"version"}
+            and gap is not None and gap <= EXACT_LENGTH)
+
+
+def match_on_youtube(query: str, length: float, candidates: list,
+                     bare: str = "") -> tuple:
     """(the result to take, or None; a line on the closest one).
 
     All must hold, or nothing is taken:
-    - the same kind of upload: a live, remix or "Version 3" cut, or a
-      lyric, audio or visualizer upload, only for a file whose name says
-      the same - otherwise its picture is of something else;
-    - the title says the same thing once brackets and punctuation are
-      set aside - against the video's title alone and with its artist in
-      front, since a filename is usually "Artist - Title (Official Video)";
+    - the same kind of upload (_same_kind);
+    - the title says the same thing once brackets, punctuation and
+      labels are set aside - with or without an artist in front, whether
+      the result's title carries it ("Elton John Crocodile Rock") or not;
     - the length is the file's own: to 2.5 seconds, or 10 when the title
       is as good as identical.
+    `bare` is the title without an artist the file's name did not carry
+    (one taken from its tags or folder): matching on that alone needs the
+    length to the second, since without the artist a title is a guess.
     Of several that pass, the closest in length.
     """
     from .companion import _ratio
+    from .matching import normalize
 
     want = _plain(query)
+    want_bare = _plain(bare) if bare else ""
     want_flavour = _flavour(query)
     best, best_gap, closest, closest_score = None, None, "", None
     for candidate in candidates:
         raw = candidate.raw_title or candidate.title
-        names = [raw, candidate.title]
-        for artist in candidate.artists[:2]:
-            names += ["%s - %s" % (artist, n) for n in names[:2]]
-        title_score = max(_ratio(_plain(n), want) for n in names if n)
+        forms = set()
+        for name in (raw, candidate.title):
+            if not name:
+                continue
+            plain = _plain(name)
+            forms.add(plain)
+            for artist in candidate.artists[:2]:
+                who = normalize(artist)
+                if not who:
+                    continue
+                forms.add("%s %s" % (who, plain))
+                if plain.startswith(who + " "):
+                    forms.add(plain[len(who) + 1:])
+        forms.discard("")
+        title_score = max((_ratio(f, want) for f in forms), default=0.0)
+        bare_score = max((_ratio(f, want_bare) for f in forms), default=0.0) \
+            if want_bare else 0.0
         gap = (abs(candidate.duration_seconds - length)
                if candidate.duration_seconds and length else None)
         flavour = _flavour(raw)
         slack = (LENGTH_SLACK_NEAR_IDENTICAL if title_score >= NEAR_IDENTICAL
                  else LENGTH_SLACK)
-        if (flavour == want_flavour and title_score >= TITLE_AT_LEAST
-                and gap is not None and gap <= slack):
+        kind_ok = _same_kind(want_flavour, flavour, gap)
+        if kind_ok and gap is not None and (
+                (title_score >= TITLE_AT_LEAST and gap <= slack)
+                or (bare_score >= NEAR_IDENTICAL and gap <= EXACT_LENGTH)):
             if best_gap is None or gap < best_gap:
                 best, best_gap = candidate, gap
             continue
-        score = title_score - (min(gap, 60) / 60 if gap is not None else 1)
+        shown = max(title_score, bare_score)
+        score = shown - (min(gap, 60) / 60 if gap is not None else 1)
         if closest_score is None or score > closest_score:
             closest_score = score
             why = []
-            if flavour[0] != want_flavour[0]:
+            if not kind_ok and flavour[0] != want_flavour[0]:
                 why.append("a different version (%s)" % (
                     ", ".join(sorted(flavour[0] ^ want_flavour[0]))))
             if flavour[1] != want_flavour[1]:
                 why.append("a lyric/audio upload" if flavour[1]
                            else "not a lyric/audio upload")
             closest = '"%s" - title %.0f%% alike, %s%s' % (
-                raw, title_score * 100,
+                raw, shown * 100,
                 "length %+.0fs" % (candidate.duration_seconds - length)
                 if gap is not None else "length unknown",
                 ", " + ", ".join(why) if why else "")
@@ -470,6 +572,7 @@ def backfill_video_art(roots: Iterable[Path],
     sleep = sleep or time.sleep
     failing_in_a_row = 0
     result = ArtBackfill()
+    roots = list(roots)          # walked here and read again for artists
     videos = iter_videos(roots)
     result.total = len(videos)
     folders = defaultdict(list)
@@ -555,7 +658,8 @@ def backfill_video_art(roots: Iterable[Path],
                     result.reasons[_why(exc, writing=True)] += 1
                 continue
             if image is None and search is not None and not result.search_stopped:
-                query = search_query(video)
+                bare = search_query(video)
+                query = with_artist(bare, video_artist(video, roots))
                 try:
                     length = video_length(video)
                 except Exception:
@@ -577,7 +681,9 @@ def backfill_video_art(roots: Iterable[Path],
                                 "refusing; run it again later" % (
                                     failing_in_a_row, str(exc)[:120]))
                     if candidates is not None:
-                        found, closest = match_on_youtube(query, length, candidates)
+                        found, closest = match_on_youtube(
+                            query, length, candidates,
+                            bare=bare if bare != query else "")
                         if found is None:
                             result.no_match += 1
                             if len(result.unmatched) < MISSING_EXAMPLES:
