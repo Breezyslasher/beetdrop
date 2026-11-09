@@ -49,15 +49,20 @@ class FakePlex:
       GET  /library/sections/all                 libraries and their folders
       GET  /library/sections/{id}/all?type=8     the artists in one
       GET  /library/metadata/{id}/extras         an artist's extras
-      POST /library/metadata/{id}/thumb          set an item's thumbnail,
-                                                 the image as the body
+      POST /library/metadata/{id}/posters        upload an image, as the body
+                                                 (python-plexapi's uploadPoster)
+      PUT  /library/metadata/{id}/refresh        refresh an item
+
+    and POST .../thumb answers 404, as a real server did.
     """
 
-    def __init__(self, artists, refuse_uploads=False):
+    def __init__(self, artists, refuse_uploads=False, refuse_refresh=False):
         # artists: {artist_key: [(extra_key, title, plex_file), ...]}
         self.artists = artists
         self.uploads = []
+        self.refreshes = []
         self.refuse_uploads = refuse_uploads
+        self.refuse_refresh = refuse_refresh
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -108,10 +113,21 @@ class FakePlex:
                 length = int(self.headers.get("Content-Length") or 0)
                 body = self.rfile.read(length)
                 parts = url.path.split("/")
-                if url.path.startswith("/library/metadata/") and parts[-1] == "thumb":
+                if url.path.startswith("/library/metadata/") and parts[-1] == "posters":
                     if fake.refuse_uploads:
-                        return self._reply(400)
+                        return self._reply(404)
                     fake.uploads.append((parts[3], body, self.headers.get("Content-Type")))
+                    return self._reply(200)
+                self._reply(404)
+
+            def do_PUT(self):
+                if not self._ok():
+                    return
+                parts = urlparse(self.path).path.split("/")
+                if self.path.startswith("/library/metadata/") and parts[-1] == "refresh":
+                    if fake.refuse_refresh:
+                        return self._reply(404)
+                    fake.refreshes.append(parts[3])
                     return self._reply(200)
                 self._reply(404)
 
@@ -206,20 +222,33 @@ class TestSending:
         finally:
             fake.close()
 
-    def test_a_plex_that_refuses_is_given_up_on(self, tmp_path):
+    def refusing_library(self, tmp_path, n):
         base = "/srv/disk/Music/explo"
         music = tmp_path / "music"
         artists = {"100": []}
-        for n in range(8):
-            video = music / ("v%d.mp4" % n)
+        for i in range(n):
+            video = music / ("v%d.mp4" % i)
             make_mp4(video)
             embed_cover(video, JPEG, "image/jpeg")
-            artists["100"].append((str(600 + n), "v%d" % n, "%s/v%d.mp4" % (base, n)))
-        fake = FakePlex(artists, refuse_uploads=True)
+            artists["100"].append((str(600 + i), "v%d" % i, "%s/v%d.mp4" % (base, i)))
+        return artists
+
+    def test_a_refused_upload_falls_back_to_a_refresh(self, tmp_path):
+        fake = FakePlex(self.refusing_library(tmp_path, 3), refuse_uploads=True)
         try:
             result = send_artwork(Cfg(tmp_path, fake.url))
-            assert result.failed == 5 and "may not take artwork" in result.stopped
-            assert "HTTP 400" in result.stopped
+            assert (result.sent, result.refreshed, result.failed) == (0, 3, 0)
+            assert sorted(fake.refreshes) == ["600", "601", "602"]
+            assert "upload refused: Plex answered HTTP 404" in result.reasons
+        finally:
+            fake.close()
+
+    def test_refusing_both_is_given_up_on(self, tmp_path):
+        fake = FakePlex(self.refusing_library(tmp_path, 8),
+                        refuse_uploads=True, refuse_refresh=True)
+        try:
+            result = send_artwork(Cfg(tmp_path, fake.url))
+            assert result.failed == 5 and "refused both" in result.stopped
         finally:
             fake.close()
 

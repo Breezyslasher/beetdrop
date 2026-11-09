@@ -2,9 +2,14 @@
 
 Plex does not read a music video's embedded cover art: it draws the
 thumbnail of a music video extra from a frame. What it does take is an
-image uploaded through its API - POST /library/metadata/{id}/thumb with
-the image as the body, which only the server's owner may do (Plex Media
-Server API 1.2.2, "Set an item's artwork, theme, etc").
+image uploaded through its API - POST /library/metadata/{id}/posters
+with the image as the body, as python-plexapi's uploadPoster does; only
+the server's owner may. (POST .../thumb, the published API's spelling,
+answered 404 on a real server.) python-plexapi offers that upload for
+movies, artists and albums but not for clips, which is what extras are,
+so a server may refuse it for music videos. Then Plex is asked instead
+to refresh the item (PUT /library/metadata/{id}/refresh), which re-reads
+the file - and with it, if this Plex reads it, the embedded art.
 
 So: walk the artists of the music library, ask Plex for each one's
 extras - that is where it lists music videos, both those beside a track
@@ -39,6 +44,7 @@ class PlexArt:
     artists: int = 0
     videos: int = 0        # music video extras Plex listed
     sent: int = 0
+    refreshed: int = 0     # upload refused; Plex asked to re-read the file instead
     unchanged: int = 0     # this picture was sent before
     no_art: int = 0        # the file has no embedded artwork
     not_here: int = 0      # Plex's file is not under the music folder here
@@ -189,17 +195,27 @@ def send_artwork(config, on_progress: Callable[[float], None] = _noop,
                     result.unchanged += 1
                     continue
                 try:
-                    _call("POST", url, token, "/library/metadata/%s/thumb" % key,
+                    _call("POST", url, token, "/library/metadata/%s/posters" % key,
                           data=art[0], content_type=art[1])
-                except PlexError as exc:
-                    result.failed += 1
-                    result.reasons[str(exc)] += 1
-                    failing_in_a_row += 1
-                    if failing_in_a_row >= GIVE_UP_AFTER:
-                        result.stopped = ("%d uploads in a row refused (%s) - this Plex "
-                                          "may not take artwork for music videos"
-                                          % (failing_in_a_row, exc))
-                        return result
+                except PlexError as refused:
+                    # Not for extras, on this server. Have it re-read the
+                    # file instead; not remembered, since it is cheap and
+                    # adds nothing to Plex's store of images.
+                    result.reasons["upload refused: %s" % refused] += 1
+                    try:
+                        _call("PUT", url, token, "/library/metadata/%s/refresh" % key)
+                    except PlexError as exc:
+                        result.failed += 1
+                        failing_in_a_row += 1
+                        if failing_in_a_row >= GIVE_UP_AFTER:
+                            result.stopped = (
+                                "%d in a row refused both an upload (%s) and a "
+                                "refresh (%s)" % (failing_in_a_row, refused, exc))
+                            return result
+                        continue
+                    failing_in_a_row = 0
+                    result.refreshed += 1
+                    on_detail("asked Plex to refresh %s" % (extra.get("title") or here.name))
                     continue
                 failing_in_a_row = 0
                 sent_here[key] = digest
