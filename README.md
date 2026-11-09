@@ -167,6 +167,12 @@ is not one. Versions 0.65 to 0.67 named it for the title alone
 (`Song-video.mp4`), which Plex links to nothing; those are renamed once,
 in the background, the first time a newer version starts.
 
+The video's own YouTube thumbnail is embedded as its cover art - the
+full 1280x720 frame where YouTube has one, not the letterboxed 480x360
+default - for players that read embedded art (Kodi, Infuse, VLC, file
+browsers). Plex has no way to set artwork on a music video extra and
+draws its own thumbnail from a frame, so it may not show this one.
+
 Finding the right video is strict on identity and loose on length. A
 wrong video beside a track is worse than none, because Plex presents it
 as that song, so anything that is not the same recording by the same

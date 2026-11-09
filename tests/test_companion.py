@@ -462,3 +462,87 @@ class TestRenamingOnStartup:
         with TestClient(create_app(config)):
             _time.sleep(0.1)
         assert walks == []
+
+
+JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 64
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+
+
+class TestArtwork:
+    def grab(self, tmp_path, fetch_art):
+        audio = library_track(tmp_path)
+
+        def download(video_id, scratch, **kwargs):
+            target = scratch / "out.mp4"
+            make_mp4(target)
+            return target
+
+        return grab_companion(
+            FakeConfig(tmp_path), audio, TAGS, RESULT,
+            search=lambda q: [video("Dolly Parton - 9 to 5 (Official Video)",
+                                    seconds=175)],
+            download=download, fetch_art=fetch_art)
+
+    def test_the_videos_own_thumbnail_is_embedded(self, tmp_path):
+        from mutagen.mp4 import MP4
+        asked = []
+        found = self.grab(tmp_path, lambda vid, url: asked.append(vid) or (JPEG, "image/jpeg"))
+        covers = MP4(str(found.path)).get("covr")
+        assert asked == ["v1"]
+        assert covers and bytes(covers[0]) == JPEG
+        # The track's tags are still there beside it.
+        assert MP4(str(found.path))["\xa9nam"] == ["9 to 5"]
+
+    def test_no_artwork_still_files_the_video_and_says_so(self, tmp_path):
+        found = self.grab(tmp_path, lambda vid, url: None)
+        assert found.path.is_file() and "without artwork" in found.detail
+
+    def test_a_failing_fetch_still_files_the_video(self, tmp_path):
+        def boom(vid, url):
+            raise RuntimeError("no network")
+        found = self.grab(tmp_path, boom)
+        assert found.path.is_file()
+
+
+class TestFetchingTheThumbnail:
+    class Response:
+        def __init__(self, status, content=b""):
+            self.status_code, self.content = status, content
+
+    def serve(self, monkeypatch, pages):
+        import beetdrop.companion as companion_module  # noqa: F401
+        import requests
+        asked = []
+
+        def get(url, **kwargs):
+            asked.append(url)
+            return pages.get(url, self.Response(404))
+
+        monkeypatch.setattr(requests, "get", get)
+        return asked
+
+    MAXRES = "https://i.ytimg.com/vi/abc/maxresdefault.jpg"
+    HQ720 = "https://i.ytimg.com/vi/abc/hq720.jpg"
+    DEFAULT = "https://i.ytimg.com/vi/abc/hqdefault.jpg?sqp=1"
+
+    def test_the_full_size_frame_comes_first(self, monkeypatch):
+        from beetdrop.companion import fetch_thumbnail
+        asked = self.serve(monkeypatch, {self.MAXRES: self.Response(200, JPEG),
+                                         self.DEFAULT: self.Response(200, PNG)})
+        assert fetch_thumbnail("abc", self.DEFAULT) == (JPEG, "image/jpeg")
+        assert asked == [self.MAXRES]
+
+    def test_a_missing_one_falls_through_to_the_next(self, monkeypatch):
+        # A missing maxresdefault is a 404 that still carries an image.
+        from beetdrop.companion import fetch_thumbnail
+        asked = self.serve(monkeypatch, {self.MAXRES: self.Response(404, JPEG),
+                                         self.DEFAULT: self.Response(200, PNG)})
+        assert fetch_thumbnail("abc", self.DEFAULT) == (PNG, "image/png")
+        assert asked == [self.MAXRES, self.HQ720, self.DEFAULT]
+
+    def test_an_image_mp4_cannot_hold_is_skipped(self, monkeypatch):
+        from beetdrop.companion import fetch_thumbnail
+        webp = b"RIFF\x00\x00\x00\x00WEBPVP8 "
+        self.serve(monkeypatch, {self.MAXRES: self.Response(200, webp),
+                                 self.HQ720: self.Response(200, b"<html>")})
+        assert fetch_thumbnail("abc", "") is None

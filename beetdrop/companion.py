@@ -162,6 +162,54 @@ def pick_music_video(candidates: list, title: str, artist: str,
     return Pick(None, "no music video matched (closest was %s)" % common)
 
 
+THUMB_TIMEOUT = 10
+# Widest first. YouTube's default "hqdefault" is 480x360 with black bars
+# above and below a 16:9 picture; maxresdefault (1280x720) and hq720 are
+# the frame itself, and exist for most official videos.
+_THUMB_NAMES = ("maxresdefault.jpg", "hq720.jpg")
+
+
+def _image_kind(data: bytes) -> str:
+    """The MIME type MP4 cover art can hold, judged by the bytes - a
+    server's Content-Type is not trusted to be right - or "" for neither
+    (WebP, an HTML error page)."""
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    return ""
+
+
+def fetch_thumbnail(video_id: str, fallback_url: str = "") -> Optional[tuple]:
+    """(bytes, mime) of the video's own YouTube thumbnail, or None.
+
+    Best effort and quiet: artwork is a nicety on a video that is already
+    filed, so a miss is simply no artwork.
+    """
+    import requests
+
+    from .mb import USER_AGENT
+
+    urls = ["https://i.ytimg.com/vi/%s/%s" % (video_id, name)
+            for name in _THUMB_NAMES] if video_id else []
+    if fallback_url:
+        urls.append(fallback_url)
+    for url in urls:
+        try:
+            response = requests.get(url, timeout=THUMB_TIMEOUT,
+                                    headers={"User-Agent": USER_AGENT})
+        except Exception:
+            continue
+        # A missing maxresdefault is a 404 with a grey 120x90 placeholder;
+        # the status says so, the image would not.
+        if response.status_code != 200:
+            continue
+        kind = _image_kind(response.content)
+        if kind:
+            return response.content, kind
+    return None
+
+
 @dataclass
 class Companion:
     path: Optional[Path]
@@ -175,11 +223,14 @@ def _noop(*args) -> None:
 def grab_companion(config, audio_path: Path, tags: FullTags, result: Result,
                    search: Callable, download: Callable,
                    on_progress: Callable[[float], None] = _noop,
-                   logger=None) -> Companion:
+                   logger=None,
+                   fetch_art: Callable = fetch_thumbnail) -> Companion:
     """Find, download and file this track's music video beside it.
 
-    `search` and `download` are passed in so the job layer and the tests
-    decide what talks to YouTube - this module only decides what to keep.
+    `search`, `download` and `fetch_art` are passed in so the job layer
+    and the tests decide what talks to YouTube - this module only decides
+    what to keep. The video's YouTube thumbnail is embedded as its cover
+    art, for players that read it; Plex draws its own from a frame.
     Never raises for an ordinary miss; a companion is a bonus on a grab
     that has already succeeded.
     """
@@ -221,9 +272,15 @@ def grab_companion(config, audio_path: Path, tags: FullTags, result: Result,
                          progress_hook=progress_hook, logger=logger)
         verify_audio(video)
         try:
+            art = fetch_art(pick.result.video_id, pick.result.thumbnail_url)
+        except Exception:
+            art = None
+        try:
             # The same tags as the track, so anything reading the file
-            # rather than its name still knows what it is.
-            write_full_tags(video, tags)
+            # rather than its name still knows what it is; the art is the
+            # video's own thumbnail, not the album cover.
+            write_full_tags(video, tags, art[0] if art else None,
+                            art[1] if art else "image/jpeg")
         except Exception:
             pass
         temp = target.parent / (".%s.beetdrop-tmp" % target.name)
@@ -232,8 +289,9 @@ def grab_companion(config, audio_path: Path, tags: FullTags, result: Result,
             temp.replace(target)
         finally:
             temp.unlink(missing_ok=True)
-        return Companion(target, "music video filed beside it (%s)"
-                         % (pick.result.raw_title or pick.result.title))
+        return Companion(target, "music video filed beside it (%s)%s"
+                         % (pick.result.raw_title or pick.result.title,
+                            "" if art else ", without artwork"))
     except Exception as exc:
         return Companion(None, "found a music video but could not fetch it (%s)"
                          % str(exc)[:200])
