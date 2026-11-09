@@ -287,9 +287,11 @@ def _noop(*args) -> None:
     pass
 
 
-# "07 - ", "2-03 - ", "07. " - and "01 " with a leading zero, which no
-# title starts with; "99 Luftballons" keeps its 99.
-_TRACK_NUMBER = re.compile(r"^\s*(?:(?:\d+-)?\d{1,3}\s*[-.]\s+|0\d\s+)")
+# "07 - ", "2-03 - ", "07. ", a disc and track "1-13 " - and "01 " with a
+# leading zero, which no title starts with; "99 Luftballons" keeps its 99
+# and "1-800-273-8255" its number.
+_TRACK_NUMBER = re.compile(
+    r"^\s*(?:(?:\d+-)?\d{1,3}\s*[-.]\s+|\d{1,2}-\d{1,3}\s+|0\d\s+)")
 # Plex type suffixes and the like, however spelled ("-Video", "-Lyric"),
 # hyphen against the name as Plex writes them - " - Live" with spaces is
 # part of a title, and stays. Those that say what kind of video it is
@@ -385,6 +387,31 @@ def video_artist(video: Path, roots: Iterable[Path] = ()) -> str:
     return ""
 
 
+def video_title(video: Path) -> str:
+    """The song's title from tags, when there is one: the track named
+    like the video beside it (a clean MusicBrainz title, as Beetdrop
+    files it), else the video's own title tag. Cleaner than a file name
+    a tool cut short or numbered - "1-13 From The D 2 The LBC"."""
+    try:
+        from .backfill import AUDIO_EXTS, read_track_meta
+        for ext in AUDIO_EXTS:
+            song = video.with_suffix(ext)
+            if song.is_file():
+                meta = read_track_meta(song)
+                if meta and meta[1]:
+                    return meta[1]
+    except Exception:
+        pass
+    try:
+        from mutagen.mp4 import MP4
+        tags = MP4(str(video)).tags or {}
+        if tags.get("\xa9nam") and str(tags["\xa9nam"][0]).strip():
+            return str(tags["\xa9nam"][0]).strip()
+    except Exception:
+        pass
+    return ""
+
+
 def with_artist(query: str, artist: str) -> str:
     """The query with the artist in front, unless it already names them."""
     from .matching import normalize
@@ -441,7 +468,7 @@ def _same_kind(want: tuple, got: tuple, gap: Optional[float]) -> bool:
 
 
 def match_on_youtube(query: str, length: float, candidates: list,
-                     bare: str = "") -> tuple:
+                     bare: str = "", kind_from: str = "") -> tuple:
     """(the result to take, or None; a line on the closest one).
 
     All must hold, or nothing is taken:
@@ -454,6 +481,10 @@ def match_on_youtube(query: str, length: float, candidates: list,
     `bare` is the title without an artist the file's name did not carry
     (one taken from its tags or folder): matching on that alone needs the
     length to the second, since without the artist a title is a guess.
+    `kind_from` is the file's name, when the query's title came from
+    tags: what kind of upload it is ("-Lyric", "[Official Audio]") is
+    read from the name, which says it, not from a clean title that
+    does not.
     Of several that pass, the closest in length.
     """
     from .companion import _ratio
@@ -461,7 +492,7 @@ def match_on_youtube(query: str, length: float, candidates: list,
 
     want = _plain(query)
     want_bare = _plain(bare) if bare else ""
-    want_flavour = _flavour(query)
+    want_flavour = _flavour(kind_from or query)
     best, best_gap, closest, closest_score = None, None, "", None
     for candidate in candidates:
         raw = candidate.raw_title or candidate.title
@@ -658,7 +689,8 @@ def backfill_video_art(roots: Iterable[Path],
                     result.reasons[_why(exc, writing=True)] += 1
                 continue
             if image is None and search is not None and not result.search_stopped:
-                bare = search_query(video)
+                named = search_query(video)
+                bare = video_title(video) or named
                 query = with_artist(bare, video_artist(video, roots))
                 try:
                     length = video_length(video)
@@ -683,7 +715,8 @@ def backfill_video_art(roots: Iterable[Path],
                     if candidates is not None:
                         found, closest = match_on_youtube(
                             query, length, candidates,
-                            bare=bare if bare != query else "")
+                            bare=bare if bare != query else "",
+                            kind_from=named if bare != named else "")
                         if found is None:
                             result.no_match += 1
                             if len(result.unmatched) < MISSING_EXAMPLES:
