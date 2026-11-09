@@ -47,13 +47,14 @@ class PlexError(Exception):
 
 
 def _call(method: str, url: str, token: str, path: str,
-          params: Optional[dict] = None, allow_404: bool = False):
+          params: Optional[dict] = None, allow_404: bool = False,
+          timeout: float = TIMEOUT):
     """One request to the server, with the token in the header the API
     documents (X-Plex-Token) rather than the query string, where it would
     end up in Plex's own access logs."""
     try:
         response = requests.request(
-            method, url.rstrip("/") + path, params=params, timeout=TIMEOUT,
+            method, url.rstrip("/") + path, params=params, timeout=timeout,
             headers={"X-Plex-Token": token, "Accept": "application/json"})
     except requests.RequestException as exc:
         raise PlexError("could not reach Plex at %s (%s)"
@@ -71,7 +72,8 @@ def _call(method: str, url: str, token: str, path: str,
     return response
 
 
-def sections(url: str, token: str, fresh: bool = False) -> list:
+def sections(url: str, token: str, fresh: bool = False,
+             timeout: float = TIMEOUT) -> list:
     """Every library on the server: key, title, type and the folders it
     covers, as Plex sees them."""
     key = (url.rstrip("/"), token)
@@ -81,8 +83,9 @@ def sections(url: str, token: str, fresh: bool = False) -> list:
     # /library/sections/all is the documented listing. Servers older than
     # the published API answer only the bare /library/sections, with the
     # same body - so a 404 there is a version, not a failure.
-    response = (_call("GET", url, token, "/library/sections/all", allow_404=True)
-                or _call("GET", url, token, "/library/sections"))
+    response = (_call("GET", url, token, "/library/sections/all",
+                      allow_404=True, timeout=timeout)
+                or _call("GET", url, token, "/library/sections", timeout=timeout))
     try:
         body = response.json()
     except ValueError as exc:

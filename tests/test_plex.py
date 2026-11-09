@@ -93,7 +93,8 @@ class FakePlex:
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.url = "http://127.0.0.1:%d" % self.server.server_address[1]
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.05},
+                         daemon=True).start()
 
     def close(self):
         self.server.shutdown()

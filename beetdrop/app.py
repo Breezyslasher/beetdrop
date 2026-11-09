@@ -125,6 +125,12 @@ class MatchChoice(BaseModel):
     move: bool = True
 
 
+class PlexServerChoice(BaseModel):
+    """The server picked after a Plex PIN sign-in. Module level for the
+    same reason as MatchChoice."""
+    server_id: str
+
+
 SESSION_COOKIE = "beetdrop_session"
 
 
@@ -539,6 +545,66 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
         applesignin.AppleSignIn(base.config_dir).clear_session()
         store.set_settings({"apple_token": ""})
         return {"ok": True, "detail": "Apple session and token cleared"}
+
+    from .plexauth import SignIn, new_client_id
+    plex_signin = SignIn()
+
+    def plex_client_id() -> str:
+        """This install's identity to plex.tv, made once and kept, so the
+        account's Authorized Devices shows one Beetdrop rather than a new
+        one for every sign-in."""
+        found = store.get_settings().get("plex_client_id")
+        if not found:
+            found = new_client_id()
+            store.set_settings({"plex_client_id": found})
+        return found
+
+    def _plex_failed(exc: Exception):
+        from .plex import PlexError
+        if isinstance(exc, PlexError):
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise exc
+
+    @app.post("/api/plex/pin", dependencies=[protected])
+    async def api_plex_pin():
+        """Start a Plex sign-in: a code to enter at plex.tv/link."""
+        try:
+            return await asyncio.to_thread(plex_signin.start, plex_client_id())
+        except Exception as exc:
+            _plex_failed(exc)
+
+    @app.get("/api/plex/pin/{pin_id}", dependencies=[protected])
+    async def api_plex_pin_poll(pin_id: str):
+        """Polled by the page until the code has been entered. Then it
+        lists the account's servers - never the token."""
+        try:
+            return await asyncio.to_thread(plex_signin.poll, pin_id, plex_client_id())
+        except Exception as exc:
+            _plex_failed(exc)
+
+    @app.post("/api/plex/pin/{pin_id}/server", dependencies=[protected])
+    async def api_plex_pin_server(pin_id: str, body: PlexServerChoice):
+        """Settle on a server: find an address that answers from here,
+        save it with the server's own token, and say where scans will go."""
+        from . import plex
+        try:
+            chosen = await asyncio.to_thread(
+                plex_signin.choose, pin_id, body.server_id, plex_client_id())
+        except Exception as exc:
+            _plex_failed(exc)
+        store.set_settings({"plex_url": chosen["url"], "plex_token": chosen["token"]})
+        result = await asyncio.to_thread(plex.check, effective_config())
+        result["url"] = chosen["url"]
+        result["server"] = chosen["name"]
+        return result
+
+    @app.post("/api/plex/sign-out", dependencies=[protected])
+    async def api_plex_sign_out():
+        """Forget the server and its token. Grabs stop asking Plex to
+        scan; where Plex sees the music folder is kept, since it is still
+        true if the same server is chosen again."""
+        store.set_settings({"plex_url": "", "plex_token": ""})
+        return {"ok": True}
 
     @app.post("/api/plex/test", dependencies=[protected])
     async def api_plex_test():

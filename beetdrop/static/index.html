@@ -983,22 +983,69 @@
 
     <h3>Plex</h3>
 
-    <label>Plex server address
-      <input v-model="draft.plex_url" type="url" spellcheck="false"
-             autocomplete="off" placeholder="http://192.168.1.10:32400">
-    </label>
-    <label>Plex token
-      <input v-model="draft.plex_token" type="password" spellcheck="false"
-             autocomplete="off"
-             :placeholder="settings && settings.plex_token_set
-                           ? 'a token is saved - paste a new one to replace it'
-                           : 'paste your X-Plex-Token'">
-    </label>
+    <p v-if="settings && settings.plex_url && settings.plex_token_set" class="note">
+      Grabs are scanned into Plex at <code>{{ settings.plex_url }}</code>.
+      <button type="button" class="linkbtn" @click="plexSignOut">Sign out of Plex</button>
+    </p>
+    <div class="jobactions">
+      <button type="button" class="primary" @click="plexSignIn"
+              :disabled="plexPin.busy || !!plexPin.code">
+        {{ settings && settings.plex_token_set ? 'Sign in to Plex again' : 'Sign in with Plex' }}
+      </button>
+    </div>
+
+    <div v-if="plexPin.code && !plexPin.servers" class="pincard">
+      <p class="note">
+        On any phone or computer, go to
+        <a href="https://plex.tv/link" target="_blank" rel="noopener">plex.tv/link</a>
+        and enter this code:
+      </p>
+      <div class="pincode" aria-label="Plex link code">{{ plexPin.code }}</div>
+      <p class="note">
+        {{ plexPin.state === 'expired' ? 'That code expired. Start again for a new one.'
+           : 'Waiting for the code to be entered...' }}
+        <button type="button" class="linkbtn" @click="plexCancel">Cancel</button>
+      </p>
+    </div>
+
+    <div v-if="plexPin.servers" class="pincard">
+      <p class="note" v-if="plexPin.servers.length">Which server should Beetdrop ask to scan?</p>
+      <p class="note" v-else>That Plex account has no server of its own to scan.</p>
+      <button v-for="server in plexPin.servers" :key="server.id" type="button"
+              class="candidate" :disabled="!server.owned || plexPin.busy"
+              @click="plexChoose(server)">
+        <strong>{{ server.name }}</strong>
+        <span class="note">
+          <template v-if="server.owned">yours<template v-if="server.version">
+            &middot; Plex {{ server.version }}</template></template>
+          <template v-else>shared by {{ server.shared_by || 'someone else' }} &mdash;
+            only its owner can ask it to scan</template>
+        </span>
+      </button>
+      <p v-if="plexPin.busy" class="note">Finding an address Beetdrop can reach...</p>
+      <button type="button" class="linkbtn" @click="plexCancel">Cancel</button>
+    </div>
+    <p v-if="plexPin.error" class="note warntext">{{ plexPin.error }}</p>
+
     <label>Where Plex sees the music folder
       <input v-model="draft.plex_music_path" type="text" spellcheck="false"
              autocomplete="off"
              :placeholder="settings ? settings.music_root + ' (same as here)' : ''">
     </label>
+    <details class="explain">
+      <summary>Or enter the address and token yourself</summary>
+      <label>Plex server address
+        <input v-model="draft.plex_url" type="url" spellcheck="false"
+               autocomplete="off" placeholder="http://192.168.1.10:32400">
+      </label>
+      <label>Plex token
+        <input v-model="draft.plex_token" type="password" spellcheck="false"
+               autocomplete="off"
+               :placeholder="settings && settings.plex_token_set
+                             ? 'a token is saved - paste a new one to replace it'
+                             : 'paste your X-Plex-Token'">
+      </label>
+    </details>
     <div class="jobactions">
       <button type="button" @click="testPlex" :disabled="testingPlex">
         {{ testingPlex ? 'Checking...' : 'Save and test Plex' }}
@@ -1026,10 +1073,20 @@
         grab. Leave the address blank to turn it off.
       </p>
       <p class="note">
-        The token: in Plex's web app, open any track, choose Get Info, then
-        View XML. The address of the page that opens ends in
-        X-Plex-Token=&hellip; - everything after the equals sign is the
-        token. It is saved on the server and never sent back to this page.
+        Sign in with Plex shows a code to enter at plex.tv/link, the way a
+        TV or console signs in. Beetdrop then lists your servers, tries each
+        one's addresses from where Beetdrop runs, and keeps the first that
+        answers - so nothing has to be typed. Only servers you own can be
+        chosen: Plex lets only a server's owner ask it to scan. Your Plex
+        password never passes through Beetdrop, and the account token is
+        held only until you pick a server; what is kept is that server's
+        own token, saved on the server and never sent back to this page.
+      </p>
+      <p class="note">
+        To enter it yourself instead: in Plex's web app, open any track,
+        choose Get Info, then View XML. The address of the page that opens
+        ends in X-Plex-Token=&hellip; - everything after the equals sign is
+        the token.
       </p>
       <p class="note">
         "Where Plex sees the music folder" matters when Plex runs in its own
