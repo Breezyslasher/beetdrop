@@ -23,6 +23,7 @@ import asyncio
 import os
 import re
 import secrets as _secrets
+import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -197,6 +198,23 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             # Loud at startup, and again in /api/health; the process still
             # serves so the problem is visible over HTTP, not just in logs.
             print("WARNING: %s" % problem)
+        if not store.get_settings().get("companion_names_v2"):
+            # Once: music videos grabbed by 0.65-0.67 were named for the
+            # title, which Plex does not link to the track. In the
+            # background, since it walks the whole music folder.
+            def rename_old_companions():
+                from .companion import rename_title_named
+                try:
+                    count = rename_title_named(effective_config().music_root)
+                    if count:
+                        print("renamed %d music video(s) so Plex links them" % count)
+                    store.set_settings({"companion_names_v2": "1"})
+                except Exception as exc:
+                    # Shut down mid-walk, or the folder is unreadable: it
+                    # is tried again on the next start.
+                    print("WARNING: renaming music videos for Plex: %s" % exc)
+            threading.Thread(target=rename_old_companions, daemon=True,
+                             name="companion-rename").start()
         yield
         manager.shutdown()
         store.close()

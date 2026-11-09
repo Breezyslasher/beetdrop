@@ -223,7 +223,7 @@ def apply_choice(config: Config, mb, path: Path, recording_id: str,
     old_title = _current_title(path)
     if not move:
         write_full_tags(path, tags)
-        video = carry_companion(path, old_title, path, tags.title)
+        video = carry_companion(path, old_title, path)
         return Rematch(old_path=path, new_path=path, tags=tags,
                        moved_video=video is not None)
 
@@ -232,7 +232,7 @@ def apply_choice(config: Config, mb, path: Path, recording_id: str,
     if destination.resolve() == path.resolve():
         # Already where it belongs; just correct the tags in place.
         write_full_tags(path, tags)
-        video = carry_companion(path, old_title, path, tags.title)
+        video = carry_companion(path, old_title, path)
         return Rematch(old_path=path, new_path=path, tags=tags,
                        moved_video=video is not None)
 
@@ -256,7 +256,7 @@ def apply_choice(config: Config, mb, path: Path, recording_id: str,
             moved = False
     # The music video was chosen to match the audio as downloaded, so it
     # is still the right video; it only needs the new folder and name.
-    video = carry_companion(path, old_title, final, tags.title)
+    video = carry_companion(path, old_title, final)
     path.unlink(missing_ok=True)
     _prune_empty(path.parent, config.music_root)
     return Rematch(old_path=path, new_path=final, tags=tags, moved_lyrics=moved,
