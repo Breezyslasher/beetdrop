@@ -257,3 +257,39 @@ def test_it_runs_from_the_queue(tmp_path):
     assert done["stage"] == "done", done
     assert "sent artwork to Plex for 1 of 1" in done["detail"]
     assert [key for key, _, _ in fake.uploads] == ["500"]
+
+
+def test_a_file_is_found_by_the_end_of_its_path(tmp_path):
+    from beetdrop.plexart import by_tail
+    root = tmp_path / "music"
+    (root / "Weezer").mkdir(parents=True)
+    (root / "Weezer" / "Buddy Holly-video.mp4").write_bytes(b"x")
+    (root / "Intro.mp4").write_bytes(b"x")
+    found = by_tail("/srv/disk/Music/explo/Weezer/Buddy Holly-video.mp4", root)
+    assert found == (root / "Weezer" / "Buddy Holly-video.mp4", "/srv/disk/Music/explo")
+    # A file name alone could be anyone's.
+    assert by_tail("/srv/disk/Other/Intro.mp4", root) is None
+    assert by_tail("/srv/disk/Music/explo/Ed Sheeran/One.mp4", root) is None
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+def test_without_a_folder_mapping_it_learns_one(tmp_path):
+    music = tmp_path / "music"
+    first = music / "Weezer" / "Buddy Holly-video.mp4"
+    second = music / "Ed Sheeran" / "One-video.mp4"
+    for video in (first, second):
+        make_mp4(video)
+        embed_cover(video, JPEG, "image/jpeg")
+    base = "/srv/disk/Music/explo"
+    fake = FakePlex({
+        "100": [("500", "Buddy Holly", base + "/Weezer/Buddy Holly-video.mp4")],
+        "101": [("501", "One", base + "/Ed Sheeran/One-video.mp4")]})
+    try:
+        config = Cfg(tmp_path, fake.url)
+        config.plex_music_path = ""      # not set, and nothing to guess it from
+        notes = []
+        result = send_artwork(config, on_detail=notes.append)
+        assert result.sent == 2 and result.not_here == 0
+        assert "Plex sees the music folder at /srv/disk/Music/explo" in notes
+    finally:
+        fake.close()
