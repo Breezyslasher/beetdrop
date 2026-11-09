@@ -49,14 +49,19 @@ class PlexError(Exception):
 
 def _call(method: str, url: str, token: str, path: str,
           params: Optional[dict] = None, allow_404: bool = False,
-          timeout: float = TIMEOUT):
+          timeout: float = TIMEOUT, data: Optional[bytes] = None,
+          content_type: str = ""):
     """One request to the server, with the token in the header the API
     documents (X-Plex-Token) rather than the query string, where it would
-    end up in Plex's own access logs."""
+    end up in Plex's own access logs. `data` is a request body - an
+    uploaded image, say."""
+    headers = {"X-Plex-Token": token, "Accept": "application/json"}
+    if content_type:
+        headers["Content-Type"] = content_type
     try:
         response = requests.request(
             method, url.rstrip("/") + path, params=params, timeout=timeout,
-            headers={"X-Plex-Token": token, "Accept": "application/json"})
+            headers=headers, data=data)
     except requests.RequestException as exc:
         raise PlexError("could not reach Plex at %s (%s)"
                         % (url, exc.__class__.__name__)) from exc

@@ -1142,6 +1142,22 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
                  "Library lyrics scan")
         return store.update_job(job["id"], title=title) or job
 
+    @app.post("/api/plex/send-artwork", status_code=202, dependencies=[protected])
+    async def api_plex_send_artwork():
+        """Upload each music video's embedded artwork to Plex as its
+        thumbnail - Plex does not read embedded art for music videos.
+        A picture already sent is not sent again."""
+        existing = store.find_duplicate("__plexart__", "plexart")
+        if existing is not None and existing["stage"] not in (
+                "done", "failed", "cancelled"):
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "artwork is already being sent to Plex",
+                        "existing_job": {k: existing[k] for k in
+                                         ("id", "title", "stage", "created_at")}})
+        job = manager.enqueue("__plexart__", kind="plexart")
+        return store.update_job(job["id"], title="Send music video artwork to Plex") or job
+
     @app.post("/api/videos/embed-art", status_code=202, dependencies=[protected])
     async def api_videos_embed_art(convert: bool = False, search: bool = False):
         """Embed the artwork already beside music videos - "-thumb.jpg",

@@ -229,7 +229,7 @@
       <p v-if="j.stage === 'done' && j.inbox_state === 'unverified'" class="handoff-review">
         No MusicBrainz match - filed to _review
       </p>
-      <p v-else-if="j.stage === 'done' && j.kind !== 'lyricscan' && j.kind !== 'videoart'" class="handoff">
+      <p v-else-if="j.stage === 'done' && !['lyricscan', 'videoart', 'plexart'].includes(j.kind)" class="handoff">
         Filed to library
       </p>
       <details v-if="j.log && (j.stage === 'failed' || (j.stage === 'done' && j.kind === 'videoart'))" class="joblog">
@@ -664,6 +664,20 @@
         </button>
       </div>
     </details>
+
+    <template v-if="plexLinked">
+      <p class="note">
+        Plex does not read the artwork embedded in a music video &mdash; it
+        makes its own thumbnail from a frame. This uploads each video's
+        embedded artwork to Plex as its thumbnail instead. A picture already
+        sent is not sent again.
+      </p>
+      <div class="jobactions">
+        <button type="button" @click="sendArtToPlex" :disabled="sendingPlexArt">
+          {{ sendingPlexArt ? 'Starting...' : 'Send artwork to Plex' }}
+        </button>
+      </div>
+    </template>
 
     <h3>Lyrics</h3>
     <div class="jobactions">

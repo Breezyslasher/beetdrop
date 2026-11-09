@@ -230,6 +230,33 @@ class JobManager:
                 if result.added or result.upgraded or result.purged:
                     self._tell_plex(job_id, config, config.music_root)
                 return
+            if job["kind"] == "plexart":
+                # Plex draws music video thumbnails from a frame and does
+                # not read embedded art; it takes an uploaded image.
+                from .plexart import send_artwork
+                self._update(job_id, stage="scanning",
+                             title="Send music video artwork to Plex")
+                result = send_artwork(config, on_progress=on_progress,
+                                      on_detail=on_detail)
+                detail = ("sent artwork to Plex for %d of %d music videos it lists"
+                          % (result.sent, result.videos))
+                extras = []
+                if result.unchanged:
+                    extras.append("%d sent before" % result.unchanged)
+                if result.no_art:
+                    extras.append("%d with no artwork in the file" % result.no_art)
+                if result.not_here:
+                    extras.append("%d not in the music folder here" % result.not_here)
+                if result.failed:
+                    top, _n = result.reasons.most_common(1)[0]
+                    extras.append("%d refused: %s" % (result.failed, top))
+                if extras:
+                    detail += " (" + ", ".join(extras) + ")"
+                if result.stopped:
+                    detail += "; stopped: " + result.stopped
+                self._update(job_id, stage="done", progress=100.0,
+                             detail=detail[:2000], log=collector.text()[:20000])
+                return
             if job["kind"] == "videoart":
                 # Embed the image beside each music video into it - or its
                 # YouTube thumbnail, by the link in its tags. video_id says
