@@ -36,7 +36,7 @@ from .library import (
     place_file,
     track_filename,
 )
-from .matching import credit_ids, credit_name, select_release
+from .matching import credit_ids, credit_name, select_release, select_release_for
 
 AUDIO_EXTS = (".opus", ".ogg", ".mp3", ".m4a", ".flac")
 
@@ -82,7 +82,7 @@ def search_library(root: Path, query: str, limit: int = 50) -> list:
     return found
 
 
-def describe_recording(recording: dict) -> dict:
+def describe_recording(recording: dict, album: str = "") -> dict:
     """One candidate reduced to what a person needs to tell it apart.
 
     The release matters as much as the recording: two entries with the
@@ -90,7 +90,9 @@ def describe_recording(recording: dict) -> dict:
     compilation version, and only the release name says which.
     """
     releases = recording.get("releases") or []
-    chosen = select_release(releases) or (releases[0] if releases else {})
+    # The album asked for, when it is among them: that is the one it will
+    # be filed under, so that is the one to show.
+    chosen = select_release_for(releases, album) or (releases[0] if releases else {})
     millis = recording.get("length") or 0
     release_mbid = (chosen or {}).get("id") or ""
     return {
@@ -109,7 +111,8 @@ def describe_recording(recording: dict) -> dict:
     }
 
 
-def search_candidates(mb, title: str, artist: str, limit: int = 10) -> list:
+def search_candidates(mb, title: str, artist: str, limit: int = 10,
+                      album: str = "") -> list:
     """What MusicBrainz has for this text, unfiltered.
 
     Deliberately not scored or rejected: the automatic checks are what
@@ -118,14 +121,17 @@ def search_candidates(mb, title: str, artist: str, limit: int = 10) -> list:
     """
     if not title.strip():
         return []
-    found = mb.search_recordings(title.strip(), artist.strip(), limit=limit)
-    return [describe_recording(row) for row in found]
+    album = album.strip()
+    found = mb.search_recordings(title.strip(), artist.strip(), limit=limit,
+                                 album=album)
+    return [describe_recording(row, album) for row in found]
 
 
 def _tags_for(mb, recording: dict, fallback_title: str,
-              fallback_artist: str) -> tuple:
-    """(tags, release) for a recording a person chose."""
-    chosen = select_release(recording.get("releases") or [])
+              fallback_artist: str, album: str = "") -> tuple:
+    """(tags, release) for a recording a person chose - on the album they
+    named, when the recording is on a release of that name."""
+    chosen = select_release_for(recording.get("releases") or [], album)
     if chosen is None:
         return FullTags(
             title=recording.get("title") or fallback_title,
@@ -181,21 +187,24 @@ def _current_title(path: Path) -> str:
         return ""
 
 
-def _find_recording(mb, recording_id: str, title: str, artist: str) -> Optional[dict]:
+def _find_recording(mb, recording_id: str, title: str, artist: str,
+                    album: str = "") -> Optional[dict]:
     """The chosen recording, from the same search that offered it.
 
     Re-running the search rather than looking the id up directly keeps
     this to endpoints the client already has, and the response is cached
     from moments ago when a person was reading it.
     """
-    for row in mb.search_recordings(title.strip(), artist.strip(), limit=25):
+    for row in mb.search_recordings(title.strip(), artist.strip(), limit=25,
+                                    album=album.strip()):
         if row.get("id") == recording_id:
             return row
     return None
 
 
 def apply_choice(config: Config, mb, path: Path, recording_id: str,
-                 title: str, artist: str, move: bool = True) -> Rematch:
+                 title: str, artist: str, move: bool = True,
+                 album: str = "") -> Rematch:
     """Re-tag this file as the chosen recording and re-file it.
 
     Moving is the default because a wrong match is not only wrong tags:
@@ -215,11 +224,11 @@ def apply_choice(config: Config, mb, path: Path, recording_id: str,
     """
     if not path.is_file():
         raise FileNotFoundError("that file is gone")
-    recording = _find_recording(mb, recording_id, title, artist)
+    recording = _find_recording(mb, recording_id, title, artist, album)
     if recording is None:
         raise LookupError("MusicBrainz no longer offers that recording")
 
-    tags, _release = _tags_for(mb, recording, title, artist)
+    tags, _release = _tags_for(mb, recording, title, artist, album.strip())
     old_title = _current_title(path)
     if not move:
         write_full_tags(path, tags)
