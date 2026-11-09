@@ -857,3 +857,51 @@ def test_no_thumbnail_at_all_is_a_404_with_the_reason(tmp_path, monkeypatch):
                                                         "video_id": "fffffffffff"})
     assert response.status_code == 404
     assert response.json()["detail"] == "YouTube has no thumbnail for that video"
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+class TestChangingArtworkAlreadyThere:
+    def library(self, tmp_path):
+        from beetdrop.videoart import embed_cover
+        music = tmp_path / "music"
+        done = music / "Green Day" / "Holiday.mp4"
+        make_mp4(done)
+        embed_cover(done, JPEG, "image/jpeg")
+        bare = music / "Green Day" / "Boulevard of Broken Dreams.mp4"
+        make_mp4(bare)
+        make_mp4(music / "Weezer" / "Holiday.mp4")
+        return music, done
+
+    def test_found_by_name_with_or_without_artwork(self, tmp_path):
+        from beetdrop.videoart import find_videos
+        music, _done = self.library(tmp_path)
+        videos, total = find_videos([music], "green day")
+        assert total == 2
+        assert {v["name"]: v["has_art"] for v in videos} == {
+            "Holiday.mp4": True, "Boulevard of Broken Dreams.mp4": False}
+        # Every word must be there, in the name or the folder.
+        assert find_videos([music], "holiday weezer")[1] == 1
+        assert find_videos([music], "   ")[1] == 0
+
+    def test_through_the_api_the_picture_now_and_a_new_one(self, tmp_path, monkeypatch):
+        import beetdrop.videoart as videoart
+        music, done = self.library(tmp_path)
+        monkeypatch.setattr(videoart, "fetch_thumbnail", lambda vid, url="": (PNG, "image/png"))
+        config = Config(music_root=music, scratch_root=tmp_path / "s",
+                        config_dir=tmp_path / "c")
+        with TestClient(create_app(config)) as client:
+            found = client.get("/api/videos/find?q=green day holiday").json()
+            assert found["total"] == 1 and found["videos"][0]["has_art"] is True
+            now = client.get("/api/videos/artwork", params={"path": str(done)})
+            assert now.status_code == 200 and now.content == JPEG
+            assert now.headers["content-type"] == "image/jpeg"
+            changed = client.post("/api/videos/art", json={"path": str(done),
+                                                            "video_id": "fffffffffff"})
+            assert changed.status_code == 200
+            assert client.get("/api/videos/artwork",
+                              params={"path": str(done)}).content == PNG
+            none = client.get("/api/videos/artwork", params={
+                "path": str(music / "Green Day" / "Boulevard of Broken Dreams.mp4")})
+            assert none.status_code == 404
+            outside = client.get("/api/videos/artwork", params={"path": "/etc/passwd"})
+            assert outside.status_code == 400

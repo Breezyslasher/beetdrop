@@ -1177,6 +1177,29 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             max(1, min(limit, 200)))
         return {"videos": videos, "total": total}
 
+    @app.get("/api/videos/find", dependencies=[protected])
+    async def api_videos_find(q: str, limit: int = 50):
+        """Music videos by name, with artwork or without - to change the
+        picture of one that already has one."""
+        from .videoart import find_videos
+        config = effective_config()
+        videos, total = await asyncio.to_thread(
+            find_videos, [config.music_root, config.video_root], q,
+            max(1, min(limit, 200)))
+        return {"videos": videos, "total": total}
+
+    @app.get("/api/videos/artwork", dependencies=[protected])
+    async def api_videos_artwork(path: str):
+        """The picture embedded in a music video now, to see before
+        changing it."""
+        from .plexart import embedded_art
+        video = _video_in_library(path)
+        art = await asyncio.to_thread(embedded_art, video)
+        if not art:
+            raise HTTPException(status_code=404, detail="no artwork in that video")
+        return Response(content=art[0], media_type=art[1],
+                        headers={"Cache-Control": "no-store"})
+
     @app.get("/api/videos/art-candidates", dependencies=[protected])
     async def api_videos_art_candidates(q: str):
         """YouTube videos for this text, unscored: a person is choosing."""

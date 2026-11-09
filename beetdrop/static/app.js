@@ -90,6 +90,8 @@ const app = createApp({
       plexLinked: false,
       missingArt: [],
       missingArtTotal: 0,
+      artVideoQuery: "",
+      artListFound: false,
       loadingMissingArt: false,
       choosingArt: "",
       // A Plex PIN sign-in in progress. The account token never reaches
@@ -419,13 +421,34 @@ const app = createApp({
       }
     },
 
+    async findArtVideos() {
+      if (!this.artVideoQuery.trim()) return;
+      this.loadingMissingArt = true;
+      try {
+        const body = await this.api(
+          "/api/videos/find?q=" + encodeURIComponent(this.artVideoQuery));
+        this.missingArt = (body.videos || []).map((v) => Object.assign(
+          {}, v, { candidates: null, searching: false, artVersion: 0 }));
+        this.missingArtTotal = body.total || 0;
+        this.artListFound = true;
+        if (!this.missingArt.length) this.showToast("No music video matched that");
+      } catch (err) {
+        if (err.message !== "password required") {
+          this.showToast("Search failed: " + err.message);
+        }
+      } finally {
+        this.loadingMissingArt = false;
+      }
+    },
+
     async loadMissingArt() {
       this.loadingMissingArt = true;
       try {
         const body = await this.api("/api/videos/missing-art");
         this.missingArt = (body.videos || []).map((v) => Object.assign(
-          {}, v, { candidates: null, searching: false }));
+          {}, v, { candidates: null, searching: false, artVersion: 0 }));
         this.missingArtTotal = body.total || 0;
+        this.artListFound = false;
         if (!this.missingArt.length) this.showToast("Every music video has artwork");
       } catch (err) {
         if (err.message !== "password required") {
@@ -460,8 +483,15 @@ const app = createApp({
           body: JSON.stringify({ path: video.path, video_id: candidate.video_id }),
         });
         this.showToast(body.detail || "artwork embedded");
-        this.missingArt = this.missingArt.filter((v) => v.path !== video.path);
-        this.missingArtTotal = Math.max(0, this.missingArtTotal - 1);
+        if (this.artListFound) {
+          // Found by name: it stays, showing its new picture.
+          video.has_art = true;
+          video.artVersion = (video.artVersion || 0) + 1;
+          video.candidates = null;
+        } else {
+          this.missingArt = this.missingArt.filter((v) => v.path !== video.path);
+          this.missingArtTotal = Math.max(0, this.missingArtTotal - 1);
+        }
       } catch (err) {
         if (err.message !== "password required") {
           this.showToast("Could not use it: " + err.message);

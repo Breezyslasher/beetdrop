@@ -665,19 +665,30 @@
       </div>
     </details>
 
-    <div class="jobactions">
+    <div class="searchrow">
+      <input type="search" v-model="artVideoQuery" @keyup.enter="findArtVideos"
+             placeholder="find a music video in your library...">
+      <button type="button" @click="findArtVideos"
+              :disabled="loadingMissingArt || !artVideoQuery.trim()">Find</button>
+    </div>
+    <div class="jobactions" style="margin-top:10px">
       <button type="button" @click="loadMissingArt" :disabled="loadingMissingArt">
         {{ loadingMissingArt ? 'Looking...' : 'Find videos with no artwork' }}
       </button>
     </div>
     <details v-if="missingArt.length" class="joblog" open>
-      <summary>{{ missingArtTotal }} music video(s) with no artwork</summary>
+      <summary>{{ missingArtTotal }} music video(s) {{ artListFound ? 'found' : 'with no artwork' }}</summary>
       <div v-for="video in missingArt" :key="video.path" class="review">
         <p class="review-track">
           <strong>{{ video.name }}</strong>
           <span class="note" v-if="video.duration"> ({{ fmtDuration(video.duration) }})</span>
         </p>
         <p class="note">{{ video.folder }}</p>
+        <div v-if="video.has_art" class="artnow">
+          <img :src="'/api/videos/artwork?path=' + encodeURIComponent(video.path) + '&v=' + (video.artVersion || 0)"
+               alt="" loading="lazy" @error="hideImage">
+          <span class="note">its artwork now &mdash; pick another below to replace it</span>
+        </div>
         <p v-if="video.writable === false" class="note warntext">
           Beetdrop can't write in this folder, so artwork can't be added here.
           Give the user the container runs as (PUID) write access to it.
