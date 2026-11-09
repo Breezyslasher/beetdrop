@@ -19,6 +19,11 @@ Two things make that harder than one URL:
 
 Best effort throughout. A Plex that is down, asleep or unreachable is
 reported on the job card and never fails a grab.
+
+Requests follow Plex's published OpenAPI description (Plex Media Server
+API 1.2.2): GET /library/sections/all to list libraries, and POST
+/library/sections/{id}/refresh?path=... to scan one folder, with the
+token in the X-Plex-Token header.
 """
 
 from __future__ import annotations
@@ -41,16 +46,26 @@ class PlexError(Exception):
     """Plex could not be asked, as distinct from saying no."""
 
 
-def _get(url: str, token: str, path: str, params: Optional[dict] = None):
+def _call(method: str, url: str, token: str, path: str,
+          params: Optional[dict] = None, allow_404: bool = False):
+    """One request to the server, with the token in the header the API
+    documents (X-Plex-Token) rather than the query string, where it would
+    end up in Plex's own access logs."""
     try:
-        response = requests.get(
-            url.rstrip("/") + path, params=params, timeout=TIMEOUT,
+        response = requests.request(
+            method, url.rstrip("/") + path, params=params, timeout=TIMEOUT,
             headers={"X-Plex-Token": token, "Accept": "application/json"})
     except requests.RequestException as exc:
         raise PlexError("could not reach Plex at %s (%s)"
                         % (url, exc.__class__.__name__)) from exc
     if response.status_code == 401:
         raise PlexError("Plex refused the token")
+    if response.status_code == 404 and allow_404:
+        return None
+    if response.status_code == 503:
+        # The API documents this for music refreshes specifically.
+        raise PlexError("Plex cannot refresh a music library while the server "
+                        "is signed out of plex.tv")
     if not response.ok:
         raise PlexError("Plex answered HTTP %d" % response.status_code)
     return response
@@ -63,8 +78,13 @@ def sections(url: str, token: str, fresh: bool = False) -> list:
     cached = _cache.get(key)
     if cached and not fresh and time.monotonic() - cached[0] < SECTIONS_TTL:
         return cached[1]
+    # /library/sections/all is the documented listing. Servers older than
+    # the published API answer only the bare /library/sections, with the
+    # same body - so a 404 there is a version, not a failure.
+    response = (_call("GET", url, token, "/library/sections/all", allow_404=True)
+                or _call("GET", url, token, "/library/sections"))
     try:
-        body = _get(url, token, "/library/sections").json()
+        body = response.json()
     except ValueError as exc:
         raise PlexError("Plex sent something that is not a library list") from exc
     found = []
@@ -131,9 +151,12 @@ def scan_folder(config, folder: Path) -> str:
         if section is None:
             return ("Plex has no library containing %s - check where Plex sees "
                     "the music folder in Settings" % target)
-        _get(config.plex_url, config.plex_token,
-             "/library/sections/%s/refresh" % section["key"],
-             params={"path": target})
+        # POST, as the API documents it: a refresh changes server state.
+        # `path` restricts it to that folder, so the library is never
+        # rescanned whole for one grab.
+        _call("POST", config.plex_url, config.plex_token,
+              "/library/sections/%s/refresh" % section["key"],
+              params={"path": target})
         return "Plex is scanning it into %s" % section["title"]
     except PlexError as exc:
         return "Plex was not told: %s" % exc

@@ -22,44 +22,74 @@ pytestmark = pytest.mark.usefixtures("loopback_only")
 
 
 class FakePlex:
-    """Enough of a Plex Media Server to be scanned: the library list and
-    the per-section refresh, behind the X-Plex-Token header."""
+    """Enough of a Plex Media Server to be scanned, held to the published
+    API (OpenAPI, Plex Media Server 1.2.2) rather than to what Beetdrop
+    happens to send:
 
-    def __init__(self, sections):
+      GET  /library/sections/all             the library list
+      POST /library/sections/{id}/refresh    a scan, ?path= restricting it
+
+    anything else gets the status a real server gives a wrong method or
+    path. `legacy=True` is a server older than that API, which answers
+    only the bare /library/sections. `signed_out=True` refuses refreshes
+    with the 503 the API documents for a server signed out of plex.tv.
+    """
+
+    def __init__(self, sections, legacy=False, signed_out=False):
         self.sections = sections
         self.refreshes = []
         self.requests = []
         fake = self
+        listing = "/library/sections" if legacy else "/library/sections/all"
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args):
                 pass
 
+            def _reply(self, status, body=b""):
+                self.send_response(status)
+                if body:
+                    self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _authorised(self, url):
+                fake.requests.append((self.command, url.path))
+                if self.headers.get("X-Plex-Token") != TOKEN:
+                    self._reply(401)
+                    return False
+                return True
+
             def do_GET(self):
                 url = urlparse(self.path)
-                fake.requests.append(url.path)
-                if self.headers.get("X-Plex-Token") != TOKEN:
-                    self.send_response(401)
-                    self.end_headers()
+                if not self._authorised(url):
                     return
-                if url.path == "/library/sections":
-                    body = json.dumps({"MediaContainer": {"Directory": [
+                if url.path == listing:
+                    self._reply(200, json.dumps({"MediaContainer": {"Directory": [
                         {"key": key, "title": title, "type": kind,
-                         "Location": [{"path": path} for path in paths]}
-                        for key, title, kind, paths in fake.sections]}}).encode()
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    self.end_headers()
-                    self.wfile.write(body)
+                         "Location": [{"id": i, "path": path}
+                                      for i, path in enumerate(paths)]}
+                        for key, title, kind, paths in fake.sections]}}).encode())
+                elif url.path.endswith("/refresh"):
+                    self._reply(405)   # a refresh is a POST
+                else:
+                    self._reply(404)
+
+            def do_POST(self):
+                url = urlparse(self.path)
+                if not self._authorised(url):
                     return
-                if url.path.startswith("/library/sections/") and url.path.endswith("/refresh"):
-                    key = url.path.split("/")[3]
-                    fake.refreshes.append((key, parse_qs(url.query).get("path", [""])[0]))
-                    self.send_response(200)
-                    self.end_headers()
-                    return
-                self.send_response(404)
-                self.end_headers()
+                parts = url.path.split("/")
+                if (len(parts) == 5 and parts[1:3] == ["library", "sections"]
+                        and parts[4] == "refresh"):
+                    if signed_out:
+                        self._reply(503)
+                        return
+                    fake.refreshes.append(
+                        (parts[3], parse_qs(url.query).get("path", [""])[0]))
+                    self._reply(200)
+                else:
+                    self._reply(404)
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.url = "http://127.0.0.1:%d" % self.server.server_address[1]
@@ -146,7 +176,7 @@ class TestScanning:
         config = Cfg(tmp_path, server.url, TOKEN, "/data/music")
         for _ in range(3):
             plex.scan_folder(config, config.music_root)
-        assert server.requests.count("/library/sections") == 1
+        assert server.requests.count(("GET", "/library/sections/all")) == 1
         assert len(server.refreshes) == 3
 
     def test_a_folder_plex_does_not_cover_is_reported_not_scanned(self, tmp_path, server):
@@ -158,6 +188,32 @@ class TestScanning:
     def test_a_bad_token_is_said_plainly(self, tmp_path, server):
         config = Cfg(tmp_path, server.url, "wrong", "/data/music")
         assert "refused the token" in plex.scan_folder(config, config.music_root)
+
+    def test_the_scan_is_a_post_as_the_api_documents(self, tmp_path, server):
+        # A refresh changes server state; the published API has it as a
+        # POST. This fake answers a GET refresh with 405, as a server
+        # following the API may, so a GET would show up here as no scan.
+        config = Cfg(tmp_path, server.url, TOKEN, "/data/music")
+        plex.scan_folder(config, config.music_root)
+        assert ("POST", "/library/sections/3/refresh") in server.requests
+        assert ("GET", "/library/sections/3/refresh") not in server.requests
+
+    def test_an_older_server_without_the_documented_listing_still_works(self, tmp_path):
+        old = FakePlex([("3", "Music", "artist", ["/data/music"])], legacy=True)
+        try:
+            config = Cfg(tmp_path, old.url, TOKEN, "/data/music")
+            assert "Music" in plex.scan_folder(config, config.music_root)
+            assert old.refreshes == [("3", "/data/music")]
+        finally:
+            old.close()
+
+    def test_a_signed_out_server_says_why(self, tmp_path):
+        out = FakePlex([("3", "Music", "artist", ["/data/music"])], signed_out=True)
+        try:
+            config = Cfg(tmp_path, out.url, TOKEN, "/data/music")
+            assert "signed out of plex.tv" in plex.scan_folder(config, config.music_root)
+        finally:
+            out.close()
 
     def test_an_unreachable_plex_never_raises(self, tmp_path):
         with socket.socket() as sock:

@@ -205,8 +205,16 @@ folder Plex knows about, so the right value can be copied rather than
 guessed. The token is stored on the server like the Apple token and never
 sent back to the page.
 
+Requests follow Plex's published OpenAPI description: `GET
+/library/sections/all` to find the library, `POST
+/library/sections/{id}/refresh?path=...` to scan the folder, token in the
+`X-Plex-Token` header. A server older than that API, which only answers
+the bare `/library/sections`, is handled too.
+
 It is best effort: a Plex that is off or unreachable is noted on the job
-card and never fails a grab. Env: `BEETDROP_PLEX_URL`,
+card and never fails a grab. One Plex refusal worth knowing: a server
+signed out of plex.tv will not refresh a music library, and the job card
+says so rather than reporting a bare HTTP 503. Env: `BEETDROP_PLEX_URL`,
 `BEETDROP_PLEX_TOKEN`, `BEETDROP_PLEX_MUSIC_PATH`.
 
 ## Fixing a wrong match
