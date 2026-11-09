@@ -193,7 +193,13 @@ A video with no image beside it but a YouTube link in its tags - yt-dlp's
 `--embed-metadata` writes one into the comment - or a yt-dlp style
 `[videoid]` at the end of its name gets that video's own thumbnail
 fetched instead. A WebM or Matroska file named `.mp4` is reported as
-such: it plays, but has no place for MP4 cover art.
+such: it plays, but has no place for MP4 cover art. **Convert them, then
+embed artwork** (under the same button) remuxes each into the real MP4
+its name claims - video and audio copied untouched, nothing re-encoded,
+same name, tags and any YouTube link kept, subtitles inside dropped -
+and checks the result is as long as the original before replacing it.
+One whose codecs play poorly in MP4 (Vorbis audio, say) is left alone,
+and the job log says why.
 
 Finding the right video is strict on identity and loose on length. A
 wrong video beside a track is worse than none, because Plex presents it

@@ -399,10 +399,17 @@ const app = createApp({
       }
     },
 
-    async embedVideoArt() {
+    async embedVideoArt(convert) {
+      if (convert && !window.confirm(
+          "Convert every WebM/MKV music video named .mp4 into a real MP4?\n\n"
+          + "Nothing is re-encoded and the names stay the same, but the "
+          + "files are rewritten and any subtitles inside them are dropped.")) {
+        return;
+      }
       this.embeddingArt = true;
       try {
-        await this.api("/api/videos/embed-art", { method: "POST" });
+        await this.api("/api/videos/embed-art" + (convert ? "?convert=true" : ""),
+                       { method: "POST" });
         this.showToast("Embedding artwork - progress is on the Queue");
       } catch (err) {
         if (err.message !== "password required") {

@@ -219,14 +219,18 @@ class JobManager:
                     self._tell_plex(job_id, config, config.music_root)
                 return
             if job["kind"] == "videoart":
-                # Embed the image already beside each music video into it.
-                # Reads and rewrites the library; downloads nothing.
+                # Embed the image beside each music video into it - or its
+                # YouTube thumbnail, by the link in its tags. video_id says
+                # whether WebM/MKV named .mp4 are remuxed into real MP4s.
                 from .videoart import backfill_video_art
-                self._update(job_id, stage="scanning",
-                             title="Embed music video artwork")
+                convert = job["video_id"] == "__videoart_convert__"
+                self._update(job_id, stage="scanning", title=(
+                    "Convert WebM/MKV and embed music video artwork" if convert
+                    else "Embed music video artwork"))
                 result = backfill_video_art(
                     [config.music_root, config.video_root],
-                    on_progress=on_progress, on_detail=on_detail)
+                    on_progress=on_progress, on_detail=on_detail,
+                    convert=convert)
                 detail = "embedded artwork in %d of %d music videos" % (
                     result.embedded, result.total)
                 extras = []
@@ -240,9 +244,15 @@ class JobManager:
                 if result.no_thumbnail:
                     extras.append("%d with a YouTube link but no thumbnail to fetch"
                                   % result.no_thumbnail)
-                if result.not_mp4:
+                if result.not_mp4 and convert:
+                    extras.append("%d of %d WebM/MKV named .mp4 converted to real MP4"
+                                  % (result.converted, result.not_mp4)
+                                  + ("; the log says why the rest were left"
+                                     if result.left else ""))
+                elif result.not_mp4:
                     extras.append("%d are WebM or MKV named .mp4, which cannot "
-                                  "hold MP4 artwork" % result.not_mp4)
+                                  "hold MP4 artwork - the Convert button fixes "
+                                  "that" % result.not_mp4)
                 if result.failed:
                     top, count = result.reasons.most_common(1)[0]
                     extras.append("%d could not be read or written%s" % (

@@ -56,9 +56,12 @@ class ArtBackfill:
     from_youtube: int = 0  # of embedded: thumbnail fetched by the link in its tags
     no_thumbnail: int = 0  # had a YouTube link, but no thumbnail could be fetched
     not_mp4: int = 0       # WebM or Matroska named .mp4: cannot hold MP4 art
+    converted: int = 0     # of those, remuxed into a real MP4 (when asked)
     # Why the failures failed, counted, so the card can say "permission
     # denied" rather than only how many.
     reasons: Counter = field(default_factory=Counter)
+    # Why a WebM/MKV was not converted, when converting was asked for.
+    left: Counter = field(default_factory=Counter)
     # A few videos with no image, and the images in the same folder that
     # nothing claimed - enough to see what naming was not understood.
     missing: list = field(default_factory=list)
@@ -68,6 +71,9 @@ class ArtBackfill:
         if self.reasons:
             lines.append("Could not be read or written:")
             lines += ["  %d - %s" % (n, why) for why, n in self.reasons.most_common()]
+        if self.left:
+            lines.append("WebM/MKV left as they were:")
+            lines += ["  %d - %s" % (n, why) for why, n in self.left.most_common()]
         if self.missing:
             lines.append("Examples with no image found:")
             for name, images in self.missing:
@@ -153,6 +159,71 @@ def _is_matroska(video: Path) -> bool:
             return handle.read(4) == _MATROSKA
     except OSError:
         return False
+
+
+# What MP4 players widely play. Vorbis, say, goes into an MP4 without
+# complaint and then plays in few of them - such a file is better left
+# as the WebM it is.
+MP4_VIDEO = {"h264", "hevc", "vp9", "av1", "mpeg4"}
+MP4_AUDIO = {"aac", "mp3", "opus", "ac3", "eac3", "flac", "alac"}
+REMUX_TIMEOUT = 900
+
+
+class RemuxRefused(Exception):
+    """The file was left as it is, and this says why."""
+
+
+def _probe(path: Path) -> dict:
+    import json
+    import subprocess
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-print_format", "json",
+         "-show_entries", "stream=codec_type,codec_name:format=duration", str(path)],
+        capture_output=True, text=True, timeout=120)
+    if out.returncode != 0:
+        raise RemuxRefused("ffprobe could not read it")
+    return json.loads(out.stdout or "{}")
+
+
+def remux_to_mp4(video: Path) -> None:
+    """Rewrite a WebM/MKV named .mp4 as a real MP4, same name, same
+    streams: video and audio are copied untouched (nothing re-encoded),
+    the tags come along - a YouTube link in them included. Subtitle and
+    attachment streams are dropped; MP4 has no place for most of them.
+
+    Checked before it replaces anything: the codecs must be ones MP4
+    players play, and the result must be as long as the original.
+    """
+    import subprocess
+
+    info = _probe(video)
+    streams = info.get("streams") or []
+    kinds = {(s.get("codec_type"), s.get("codec_name")) for s in streams}
+    videos = {name for kind, name in kinds if kind == "video"}
+    audios = {name for kind, name in kinds if kind == "audio"}
+    if not videos:
+        raise RemuxRefused("no video stream")
+    odd = (videos - MP4_VIDEO) | (audios - MP4_AUDIO)
+    if odd:
+        raise RemuxRefused("%s does not play well in MP4" % ", ".join(sorted(odd)))
+
+    temp = video.with_name(".%s.beetdrop-remux.mp4" % video.stem)
+    try:
+        run = subprocess.run(
+            ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(video),
+             "-map", "0:v", "-map", "0:a?", "-c", "copy", "-map_metadata", "0",
+             "-movflags", "+faststart", "-f", "mp4", str(temp)],
+            capture_output=True, text=True, timeout=REMUX_TIMEOUT)
+        if run.returncode != 0:
+            raise RemuxRefused("ffmpeg: %s" % (run.stderr.strip().splitlines() or ["failed"])[-1][:150])
+        before = float((info.get("format") or {}).get("duration") or 0)
+        after = float((_probe(temp).get("format") or {}).get("duration") or 0)
+        if before and abs(before - after) > max(1.0, before * 0.01):
+            raise RemuxRefused("the MP4 came out %.0fs long, not %.0fs" % (after, before))
+        shutil.copymode(video, temp)
+        os.replace(temp, video)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def embed_cover(video: Path, data: bytes, mime: str) -> None:
@@ -241,7 +312,8 @@ def _by_prefix(videos: list, images: list) -> dict:
 def backfill_video_art(roots: Iterable[Path],
                        on_progress: Callable[[float], None] = _noop,
                        on_detail: Callable[[str], None] = _noop,
-                       fetch_art: Callable = fetch_thumbnail) -> ArtBackfill:
+                       fetch_art: Callable = fetch_thumbnail,
+                       convert: bool = False) -> ArtBackfill:
     result = ArtBackfill()
     videos = iter_videos(roots)
     result.total = len(videos)
@@ -276,8 +348,26 @@ def backfill_video_art(roots: Iterable[Path],
             except Exception as exc:
                 if _is_matroska(video):
                     # Not damaged: a WebM or MKV someone named .mp4. It
-                    # plays, but has no place for MP4 cover art.
+                    # plays, but has no place for MP4 cover art - unless,
+                    # when asked, it is remuxed into the MP4 it claims to be.
                     result.not_mp4 += 1
+                    if not convert:
+                        continue
+                    on_detail("converting %s to MP4" % video.name)
+                    try:
+                        remux_to_mp4(video)
+                        covered, linked[video] = _inspect(video)
+                    except Exception as remux_exc:
+                        why = (str(remux_exc) if isinstance(remux_exc, RemuxRefused)
+                               else _why(remux_exc, writing=True))
+                        result.left[why] += 1
+                        on_detail("left %s as it is (%s)" % (video.name, why))
+                        continue
+                    result.converted += 1
+                    if not covered:
+                        wanting.append(video)
+                    else:
+                        result.already += 1
                     continue
                 result.failed += 1
                 result.reasons[_why(exc, writing=False)] += 1
