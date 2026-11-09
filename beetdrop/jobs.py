@@ -233,9 +233,16 @@ class JobManager:
                 if result.already:
                     extras.append("%d already had it" % result.already)
                 if result.no_image:
-                    extras.append("%d with no image beside them" % result.no_image)
+                    extras.append("%d with no image beside them or link to YouTube"
+                                  % result.no_image)
                 if result.unusable:
                     extras.append("%d whose image is not JPEG or PNG" % result.unusable)
+                if result.no_thumbnail:
+                    extras.append("%d with a YouTube link but no thumbnail to fetch"
+                                  % result.no_thumbnail)
+                if result.not_mp4:
+                    extras.append("%d are WebM or MKV named .mp4, which cannot "
+                                  "hold MP4 artwork" % result.not_mp4)
                 if result.failed:
                     top, count = result.reasons.most_common(1)[0]
                     extras.append("%d could not be read or written%s" % (
@@ -243,6 +250,9 @@ class JobManager:
                         if count != result.failed else ": " + top))
                 if extras:
                     detail += " (" + ", ".join(extras) + ")"
+                if result.from_youtube:
+                    detail += "; %d from YouTube by the link in the file's tags" % (
+                        result.from_youtube)
                 if result.by_prefix:
                     detail += "; %d matched to an image with a shortened name" % (
                         result.by_prefix)

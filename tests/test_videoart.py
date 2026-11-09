@@ -202,3 +202,84 @@ class TestExplainingItself:
         assert result.reasons["permission denied - Beetdrop cannot write in that folder"] == 1
         assert any(why.startswith("not a readable MP4") for why in result.reasons)
         assert "permission denied" in result.report()
+
+
+def tag_comment(video: Path, text: str):
+    from mutagen.mp4 import MP4
+    tagged = MP4(str(video))
+    if tagged.tags is None:
+        tagged.add_tags()
+    tagged.tags["\xa9cmt"] = [text]
+    tagged.save()
+
+
+class TestFindingTheYouTubeVideo:
+    def test_from_a_link_in_the_tags(self):
+        from beetdrop.videoart import youtube_id
+        for link in ("https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                     "https://music.youtube.com/watch?v=dQw4w9WgXcQ&list=x",
+                     "https://youtu.be/dQw4w9WgXcQ",
+                     "https://www.youtube.com/watch?feature=share&v=dQw4w9WgXcQ"):
+            assert youtube_id(Path("a.mp4"), {"\xa9cmt": [link]}) == "dQw4w9WgXcQ", link
+
+    def test_from_yt_dlps_default_filename(self):
+        from beetdrop.videoart import youtube_id
+        assert youtube_id(Path("Never Gonna Give You Up [dQw4w9WgXcQ].mp4")) == "dQw4w9WgXcQ"
+
+    def test_nothing_to_go_on(self):
+        from beetdrop.videoart import youtube_id
+        assert youtube_id(Path("01 - Ed Sheeran - One.mp4"), {"\xa9nam": ["One"]}) == ""
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+class TestFetchingWhenNothingIsBeside:
+    def test_the_linked_videos_thumbnail_is_embedded(self, tmp_path):
+        from mutagen.mp4 import MP4
+        video = tmp_path / "Rick Astley - Never Gonna Give You Up (Official Music Video).mp4"
+        make_mp4(video)
+        tag_comment(video, "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        asked = []
+        result = backfill_video_art(
+            [tmp_path], fetch_art=lambda vid, url: asked.append(vid) or (JPEG, "image/jpeg"))
+        assert asked == ["dQw4w9WgXcQ"]
+        assert (result.embedded, result.from_youtube, result.no_image) == (1, 1, 0)
+        assert bytes(MP4(str(video))["covr"][0]) == JPEG
+        # The link survives the rewrite.
+        assert MP4(str(video))["\xa9cmt"] == ["https://www.youtube.com/watch?v=dQw4w9WgXcQ"]
+
+    def test_an_image_beside_it_comes_before_the_link(self, tmp_path):
+        video = tmp_path / "v.mp4"
+        make_mp4(video)
+        tag_comment(video, "https://youtu.be/dQw4w9WgXcQ")
+        (tmp_path / "v-thumb.jpg").write_bytes(JPEG)
+        result = backfill_video_art(
+            [tmp_path], fetch_art=lambda vid, url: pytest.fail("fetched anyway"))
+        assert result.embedded == 1 and result.from_youtube == 0
+
+    def test_no_thumbnail_to_fetch_is_counted(self, tmp_path):
+        video = tmp_path / "v.mp4"
+        make_mp4(video)
+        tag_comment(video, "https://youtu.be/dQw4w9WgXcQ")
+        result = backfill_video_art([tmp_path], fetch_art=lambda vid, url: None)
+        assert (result.no_thumbnail, result.embedded, result.no_image) == (1, 0, 0)
+
+    def test_without_a_link_nothing_is_fetched(self, tmp_path):
+        make_mp4(tmp_path / "01 - Ed Sheeran - One.mp4")
+        result = backfill_video_art(
+            [tmp_path], fetch_art=lambda vid, url: pytest.fail("fetched anyway"))
+        assert result.no_image == 1
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+class TestNotReallyMp4:
+    def test_webm_named_mp4_is_named_for_what_it_is(self, tmp_path):
+        subprocess.run(
+            ["ffmpeg", "-f", "lavfi", "-i", "color=c=black:s=16x16:d=1",
+             "-f", "lavfi", "-i", "sine=duration=1", "-shortest",
+             "-c:v", "libvpx-vp9", "-c:a", "libopus", "-f", "webm",
+             str(tmp_path / "x.mp4"), "-y", "-loglevel", "error"],
+            check=True, timeout=60)
+        before = (tmp_path / "x.mp4").read_bytes()
+        result = backfill_video_art([tmp_path])
+        assert (result.not_mp4, result.failed) == (1, 0)
+        assert (tmp_path / "x.mp4").read_bytes() == before
