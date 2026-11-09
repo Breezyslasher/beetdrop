@@ -585,6 +585,8 @@
         <input type="search" v-model="track.queryArtist" placeholder="artist">
         <input type="search" v-model="track.query" placeholder="song title"
                @keyup.enter="findMatches(track)">
+        <input type="search" v-model="track.queryAlbum"
+               placeholder="album (optional)" @keyup.enter="findMatches(track)">
         <button type="button" :disabled="track.searching"
                 @click="findMatches(track)">
           {{ track.searching ? 'Looking...' : 'Find on MusicBrainz' }}
@@ -607,7 +609,8 @@
           </span>
         </button>
         <p class="note" v-if="track.candidates && !track.candidates.length">
-          Nothing found. Try just the song title, or check the artist.
+          Nothing found. Try just the song title, or check the artist -
+          or leave the album out, in case MusicBrainz spells it differently.
         </p>
       </div>
       <p class="note" v-if="unverifiedTotal > unverified.length">

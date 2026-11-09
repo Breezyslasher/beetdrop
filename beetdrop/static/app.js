@@ -1030,6 +1030,9 @@ const app = createApp({
       return (tracks || []).map((track) => Object.assign({}, track, {
         query: track.title || track.name.replace(/\.[^.]+$/, ""),
         queryArtist: track.artist || "",
+        // Blank, not the current album: for a track that matched wrong
+        // that is the wrong album, and in _review it is only the title.
+        queryAlbum: "",
         candidates: null,
         searching: false,
         move: true,
@@ -1060,7 +1063,8 @@ const app = createApp({
       try {
         const body = await this.api(
           "/api/match/candidates?title=" + encodeURIComponent(track.query)
-          + "&artist=" + encodeURIComponent(track.queryArtist));
+          + "&artist=" + encodeURIComponent(track.queryArtist)
+          + "&album=" + encodeURIComponent(track.queryAlbum || ""));
         track.candidates = body.candidates || [];
         if (!track.candidates.length) {
           this.showToast("MusicBrainz returned nothing for that");
@@ -1082,7 +1086,7 @@ const app = createApp({
           body: JSON.stringify({
             path: track.path, recording_id: candidate.id,
             title: track.query, artist: track.queryArtist,
-            move: track.move,
+            album: track.queryAlbum || "", move: track.move,
           }),
         });
         this.showToast(body.detail || "filed");

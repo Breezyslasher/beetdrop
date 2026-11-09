@@ -184,6 +184,28 @@ def select_release(releases: list[dict]) -> Optional[dict]:
     return sorted(pool, key=sort_key)[0]
 
 
+def releases_named(releases: list[dict], album: str) -> list[dict]:
+    """The releases called `album`: exactly, once punctuation and case
+    are set aside; failing that, ignoring bracketed extras, so "Rumours"
+    finds "Rumours (Deluxe Edition)"; failing that, none."""
+    want = normalize(album)
+    if not want:
+        return []
+    exact = [r for r in releases if normalize(r.get("title", "")) == want]
+    if exact:
+        return exact
+    want_base = base_title(album)
+    return [r for r in releases
+            if want_base and base_title(r.get("title", "")) == want_base]
+
+
+def select_release_for(releases: list[dict], album: str = "") -> Optional[dict]:
+    """select_release, but among the releases called `album` when any
+    are - a person who said which album meant it."""
+    named = releases_named(releases, album) if album else []
+    return select_release(named or releases)
+
+
 def score_release(yt_album: str, yt_artist: str, yt_track_count: Optional[int],
                   release: dict) -> float:
     """0-100 score of an MB release search result against a YouTube album."""

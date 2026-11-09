@@ -264,6 +264,15 @@ where those tags say it belongs; the .lrc beside it comes too, since
 lyrics are matched to the audio rather than the tags. Candidates are
 shown as MusicBrainz returned them, unscored: the automatic checks are
 what got it wrong, so applying them again would hide the right answer.
+
+The album box is optional. Filled in, it narrows the search to
+recordings on a release of that name - the way to tell the album cut
+from the single, a live take or a compilation when title and artist are
+the same - and the track is filed under that album rather than the one
+Beetdrop would pick (it prefers the original studio release). A name
+with bracketed extras still matches, so "Rumours" finds "Rumours
+(Deluxe Edition)". If MusicBrainz spells the album differently, leave it
+out.
 Tracks only for now; albums are a bigger job.
 
 ## Lyrics on their own

@@ -73,17 +73,20 @@ class FakeMB:
     """Stands in for the MusicBrainz client, which is rate limited to one
     request a second and must never be hit by a test."""
 
-    def __init__(self, recordings=None, release=None):
+    def __init__(self, recordings=None, release=None, releases=None):
         self.recordings = recordings if recordings is not None else [RECORDING]
         self.release = release if release is not None else RELEASE
+        self.releases = releases or {}
         self.searches = []
+        self.albums = []
 
-    def search_recordings(self, title, artist, limit=10):
+    def search_recordings(self, title, artist, limit=10, album=""):
         self.searches.append((title, artist))
+        self.albums.append(album)
         return self.recordings
 
     def get_release(self, mbid):
-        return self.release
+        return self.releases.get(mbid, self.release)
 
 
 class TestDescribingCandidates:
@@ -116,6 +119,90 @@ class TestDescribingCandidates:
         mb = FakeMB()
         assert search_candidates(mb, "  ", "Dolly Parton") == []
         assert mb.searches == []
+
+
+
+# The same recording on its original album and on a later compilation:
+# left to itself the original wins, which is wrong for someone filing
+# their compilation.
+HITS_RELEASE_ROW = {
+    "id": "rel-hits", "title": "Greatest Hits", "date": "1982-01-01",
+    "status": "Official",
+    "release-group": {"id": "rg-hits", "primary-type": "Album",
+                      "secondary-types": ["Compilation"]},
+    "artist-credit": [{"name": "Dolly Parton"}],
+}
+ON_TWO = dict(RECORDING, releases=[dict(RECORDING["releases"][0], status="Official"),
+                                   HITS_RELEASE_ROW])
+HITS_RELEASE = {
+    "id": "rel-hits", "title": "Greatest Hits", "date": "1982-01-01",
+    "release-group": {"id": "rg-hits"},
+    "artist-credit": [{"name": "Dolly Parton"}],
+    "media": [{"position": 1, "track-count": 10, "tracks": [
+        {"position": 7, "title": "9 to 5",
+         "recording": {"id": "rec-1", "title": "9 to 5"},
+         "artist-credit": [{"name": "Dolly Parton"}]},
+    ]}],
+}
+
+
+class TestNamingTheAlbum:
+    def test_it_narrows_the_search(self):
+        mb = FakeMB()
+        search_candidates(mb, "9 to 5", "Dolly Parton", album=" Greatest Hits ")
+        assert mb.albums == ["Greatest Hits"]
+
+    def test_without_one_the_search_is_as_before(self):
+        mb = FakeMB()
+        search_candidates(mb, "9 to 5", "Dolly Parton")
+        assert mb.albums == [""]
+
+    def test_the_named_album_is_the_one_shown(self):
+        assert describe_recording(ON_TWO)["album"] == "9 to 5 and Odd Jobs"
+        assert describe_recording(ON_TWO, "greatest hits")["album"] == "Greatest Hits"
+
+    def test_an_album_it_is_not_on_falls_back_to_the_usual_choice(self):
+        assert describe_recording(ON_TWO, "Jolene")["album"] == "9 to 5 and Odd Jobs"
+
+    def test_bracketed_extras_do_not_stop_a_match(self):
+        from beetdrop.matching import releases_named
+        rows = [{"id": "a", "title": "Rumours (Deluxe Edition)"},
+                {"id": "b", "title": "Tusk"}]
+        assert [r["id"] for r in releases_named(rows, "Rumours")] == ["a"]
+        assert releases_named(rows, "") == []
+
+    def test_musicbrainz_is_asked_for_that_release(self, tmp_path, monkeypatch):
+        from urllib.parse import unquote
+
+        from beetdrop.mb import MusicBrainzClient
+
+        client = MusicBrainzClient(tmp_path / "mb.sqlite3")
+        urls = []
+        monkeypatch.setattr(client, "_cached_get",
+                            lambda url: urls.append(unquote(url)) or {"recordings": []})
+        client.search_recordings("9 to 5", "Dolly Parton", album="Greatest Hits")
+        client.search_recordings("9 to 5", "Dolly Parton")
+        client.close()
+        assert 'AND release:"Greatest Hits"' in urls[0]
+        assert "release:" not in urls[1]
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+class TestFilingUnderTheNamedAlbum:
+    def test_it_lands_on_the_album_asked_for(self, tmp_path):
+        music = tmp_path / "music"
+        track = music / "_review" / "Unknown - 9 to 5" / "track.opus"
+        make_opus(track)
+        config = Config(music_root=music, scratch_root=tmp_path / "s",
+                        config_dir=tmp_path / "c")
+        mb = FakeMB(recordings=[ON_TWO], releases={"rel-hits": HITS_RELEASE})
+        outcome = apply_choice(config, mb, track, "rec-1", "9 to 5",
+                               "Dolly Parton", album="Greatest Hits")
+        assert outcome.tags.album == "Greatest Hits"
+        assert outcome.tags.track_number == 7
+        assert "Greatest Hits" in str(outcome.new_path)
+        # The same search that offered it found it again.
+        assert mb.albums == ["Greatest Hits"]
 
 
 @pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
@@ -264,6 +351,17 @@ class TestTheEndpoints:
             body = client.get(
                 "/api/match/candidates?title=9 to 5&artist=Dolly").json()
         assert body["candidates"][0]["album"] == "9 to 5 and Odd Jobs"
+
+    def test_the_album_is_passed_through(self, tmp_path, monkeypatch):
+        import beetdrop.grab as grab
+        config = self._config(tmp_path)
+        mb = FakeMB(recordings=[ON_TWO])
+        monkeypatch.setattr(grab, "get_mb_client", lambda cfg: mb)
+        with TestClient(create_app(config)) as client:
+            body = client.get("/api/match/candidates?title=9 to 5"
+                              "&artist=Dolly&album=Greatest Hits").json()
+        assert mb.albums == ["Greatest Hits"]
+        assert body["candidates"][0]["album"] == "Greatest Hits"
 
     def test_an_empty_title_returns_nothing(self, tmp_path):
         config = self._config(tmp_path)

@@ -121,6 +121,7 @@ class MatchChoice(BaseModel):
     recording_id: str
     title: str = ""      # what to search MusicBrainz with
     artist: str = ""
+    album: str = ""      # optional: narrows the search, picks the release
     # A wrong match means a wrong folder too, since the path was built
     # from the same tags - so the file moves by default. False re-tags it
     # where it stands, for a library whose layout is not Beetdrop's.
@@ -1024,7 +1025,7 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
 
     @app.get("/api/match/candidates", dependencies=[protected])
     async def api_match_candidates(title: str, artist: str = "",
-                                   limit: int = 10):
+                                   limit: int = 10, album: str = ""):
         """What MusicBrainz has for this text, unscored.
 
         The automatic checks are what produced the wrong answer, so
@@ -1039,7 +1040,7 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
 
         def run():
             return search_candidates(get_mb_client(config), title, artist,
-                                     limit=max(1, min(limit, 25)))
+                                     limit=max(1, min(limit, 25)), album=album)
 
         try:
             return {"candidates": await asyncio.to_thread(run)}
@@ -1067,7 +1068,7 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
         def run():
             return apply_choice(config, get_mb_client(config), track,
                                 body.recording_id, body.title, body.artist,
-                                move=body.move)
+                                move=body.move, album=body.album)
 
         try:
             outcome = await asyncio.to_thread(run)
