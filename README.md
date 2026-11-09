@@ -228,8 +228,12 @@ thumbnail from a frame. With Plex set up, **Send artwork to Plex** (on
 the same page) uploads each music video's embedded artwork to Plex as
 that video's thumbnail: it walks the artists of the music library, asks
 Plex for each one's extras, maps each extra's file back to the file
-here, and posts the image (`POST /library/metadata/{id}/thumb`, owner
-only). Plex keeps every image uploaded to an item, so a picture already
+here, and uploads the image (`POST /library/metadata/{id}/posters`, as
+python-plexapi does; owner only). Plex may refuse a picture for an extra
+- python-plexapi offers that upload for movies, artists and albums, not
+clips - and then it is asked to refresh the item instead, which re-reads
+the file and, if that Plex reads it, the embedded art; the job card
+counts the two apart. Plex keeps every image uploaded to an item, so a picture already
 sent is remembered and not sent again; a changed one is. If Plex refuses
 five uploads in a row it stops and says so.
 

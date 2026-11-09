@@ -247,9 +247,13 @@ class JobManager:
                     extras.append("%d with no artwork in the file" % result.no_art)
                 if result.not_here:
                     extras.append("%d not in the music folder here" % result.not_here)
-                if result.failed:
+                if result.refreshed:
                     top, _n = result.reasons.most_common(1)[0]
-                    extras.append("%d refused: %s" % (result.failed, top))
+                    extras.append("%d where Plex refused the picture (%s) and was "
+                                  "asked to refresh them instead" % (
+                                      result.refreshed, top.replace("upload refused: ", "")))
+                if result.failed:
+                    extras.append("%d refused both" % result.failed)
                 if extras:
                     detail += " (" + ", ".join(extras) + ")"
                 if result.stopped:
