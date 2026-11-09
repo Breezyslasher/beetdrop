@@ -32,6 +32,12 @@ const app = createApp({
       query: "",
       searchType: "songs",
       grabFormat: "",
+      // Song grabs also fetch the music video and file it beside the
+      // track for Plex. A per-device preference, like the layout.
+      grabWithVideo: (() => {
+        try { return localStorage.getItem("beetdrop.withVideo") === "1"; }
+        catch (err) { return false; }
+      })(),
       results: [],
       resultsType: "songs",
       searching: false,
@@ -554,6 +560,7 @@ const app = createApp({
       this.grabbing[id] = true;
       const payload = { video_id: id, kind: kind };
       if (this.grabFormat) payload.format = this.grabFormat;
+      if (kind === "track" && this.grabWithVideo) payload.with_video = true;
       if (force) payload.force = true;
       try {
         const job = await this.api("/api/grab", {
@@ -720,6 +727,12 @@ const app = createApp({
       } catch (err) {
         if (err.message !== "password required") this.showToast("Save failed: " + err.message);
       }
+    },
+
+    saveGrabWithVideo() {
+      try {
+        localStorage.setItem("beetdrop.withVideo", this.grabWithVideo ? "1" : "0");
+      } catch (err) { /* a private window keeps it for this visit only */ }
     },
 
     saveLayout() {

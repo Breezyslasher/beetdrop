@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from .companion import carry_companion
 from .config import Config
 from .fulltags import FullTags, write_full_tags
 from .library import (
@@ -163,6 +164,21 @@ class Rematch:
     new_path: Path
     tags: FullTags
     moved_lyrics: bool = False
+    moved_video: bool = False
+
+
+def _current_title(path: Path) -> str:
+    """The title the file is tagged with now, before it is re-tagged.
+
+    A companion music video is named for this, so it is what finds the
+    video to carry along.
+    """
+    try:
+        import mutagen
+        audio = mutagen.File(str(path), easy=True)
+        return ((audio.get("title") or [""])[0] if audio else "") or ""
+    except Exception:
+        return ""
 
 
 def _find_recording(mb, recording_id: str, title: str, artist: str) -> Optional[dict]:
@@ -194,7 +210,8 @@ def apply_choice(config: Config, mb, path: Path, recording_id: str,
 
     The .lrc beside it comes along on a move. Lyrics are matched to the
     audio, not to the tags, so they are still right - and leaving them
-    behind would strand them next to nothing.
+    behind would strand them next to nothing. So does a companion music
+    video, renamed for the new title, since Plex links it by title.
     """
     if not path.is_file():
         raise FileNotFoundError("that file is gone")
@@ -203,16 +220,21 @@ def apply_choice(config: Config, mb, path: Path, recording_id: str,
         raise LookupError("MusicBrainz no longer offers that recording")
 
     tags, _release = _tags_for(mb, recording, title, artist)
+    old_title = _current_title(path)
     if not move:
         write_full_tags(path, tags)
-        return Rematch(old_path=path, new_path=path, tags=tags)
+        video = carry_companion(path, old_title, path, tags.title)
+        return Rematch(old_path=path, new_path=path, tags=tags,
+                       moved_video=video is not None)
 
     destination = (album_dir(config.music_root, tags)
                    / track_filename(tags, path.suffix.lstrip(".")))
     if destination.resolve() == path.resolve():
         # Already where it belongs; just correct the tags in place.
         write_full_tags(path, tags)
-        return Rematch(old_path=path, new_path=path, tags=tags)
+        video = carry_companion(path, old_title, path, tags.title)
+        return Rematch(old_path=path, new_path=path, tags=tags,
+                       moved_video=video is not None)
 
     final = place_file(path, destination)
     try:
@@ -232,9 +254,13 @@ def apply_choice(config: Config, mb, path: Path, recording_id: str,
             moved = True
         except OSError:
             moved = False
+    # The music video was chosen to match the audio as downloaded, so it
+    # is still the right video; it only needs the new folder and name.
+    video = carry_companion(path, old_title, final, tags.title)
     path.unlink(missing_ok=True)
     _prune_empty(path.parent, config.music_root)
-    return Rematch(old_path=path, new_path=final, tags=tags, moved_lyrics=moved)
+    return Rematch(old_path=path, new_path=final, tags=tags, moved_lyrics=moved,
+                   moved_video=video is not None)
 
 
 def _prune_empty(directory: Path, root: Path) -> None:

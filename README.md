@@ -147,6 +147,46 @@ video library is a `Music Videos` subfolder of `/music`, so no extra mount
 is needed; set `VIDEO_PATH` (or the Settings field) to put it on its own
 disk. Max quality is set with `BEETDROP_VIDEO_MAX_HEIGHT` or in Settings.
 
+### A song's video, beside the song (Plex)
+
+Plex is the other way round: it reads music videos inside a music
+library, as extras linked to the track they belong to. Tick **+ music
+video** on the Songs search and a grab also finds that song's video and
+files it in the album folder under the track's title with Plex's
+`-video` suffix:
+
+```
+Artist/Album (2013)/03 - Song.opus
+Artist/Album (2013)/Song-video.mp4
+```
+
+It is named for the track's *title*, not its filename - Plex matches the
+title it shows, and the `03 - ` is only how Beetdrop names the audio.
+
+Finding the right video is strict on identity and loose on length. A
+wrong video beside a track is worse than none, because Plex presents it
+as that song, so anything that is not the same recording by the same
+artist is refused: live, remix and acoustic takes, "Official Audio"
+uploads (a still image over the track), lyric videos, visualizers,
+covers by someone else. Length is allowed a long way over - videos carry
+intros, dance breaks and credits - but not much under, since a shorter
+video is a radio edit or a different song.
+
+It is always best effort. The audio is what was asked for, so a video
+that cannot be found or fetched never fails the grab; the job card says
+what happened to it. Tracks only - an album would mean a search per
+track, and most album tracks have no video. A grab that went to
+`_review/` gets none, because its title is YouTube's guess and will
+change when the match is fixed; fixing a match carries an existing video
+along and renames it for the new title. Stats counts these apart from the
+Kodi-style library.
+
+The `-video` naming follows Plex's documented convention for music
+extras rather than a test against a live server, so it is worth one grab
+and a look in Plex before relying on it. If Plex wants it spelled
+differently, it is one function (`plex_video_filename` in
+`companion.py`).
+
 ## Fixing a wrong match
 
 There is no acoustic fingerprinting, so a cover or a same-length

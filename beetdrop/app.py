@@ -63,6 +63,9 @@ class GrabRequest(BaseModel):
     format: str = ""
     bitrate: str = ""
     force: bool = False  # grab even when it was already grabbed
+    # Also fetch the track's music video and file it beside the track,
+    # named the way Plex links a video to a track. Tracks only.
+    with_video: bool = False
 
 
 class SettingsUpdate(BaseModel):
@@ -296,7 +299,14 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
                     "existing_job": {k: duplicate[k] for k in
                                      ("id", "title", "artist", "stage", "created_at")},
                 })
-        job = manager.enqueue(video_id, body.format, body.bitrate, kind=body.kind)
+        if body.with_video and body.kind != "track":
+            # An album would mean a search per track, and most album
+            # tracks have no video - the closest match would be wrong
+            # more often than right.
+            raise HTTPException(status_code=422,
+                                detail="with_video is for single tracks only")
+        job = manager.enqueue(video_id, body.format, body.bitrate, kind=body.kind,
+                              with_video=body.with_video)
         return job
 
     @app.get("/api/jobs", dependencies=[protected])
@@ -815,8 +825,8 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
     @app.get("/api/stats", dependencies=[protected])
     async def api_stats():
         """Library health, in one read of the tree plus the jobs table."""
-        from .libraryview import (count_videos, grab_history, scan_albums,
-                                  summarise)
+        from .libraryview import (count_companion_videos, count_videos,
+                                  grab_history, scan_albums, summarise)
 
         config = effective_config()
 
@@ -824,6 +834,10 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             albums = scan_albums(config.music_root)
             totals = summarise(albums)
             totals["videos"] = count_videos(config.video_root)
+            # Videos filed beside their tracks for Plex, counted apart so
+            # the card can say which kind is which.
+            totals["companion_videos"] = count_companion_videos(
+                config.music_root, config.video_root)
             totals["bytes_free"] = int(storage_free_mb(config.music_root) or 0) * 1024 * 1024
             # bad_timing and crowded come out of summarise now. They used
             # to need a second walk of the tree and a second read of
@@ -948,6 +962,7 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
         moved = outcome.new_path != outcome.old_path
         return {"ok": True, "path": str(outcome.new_path), "moved": moved,
                 "moved_lyrics": outcome.moved_lyrics,
+                "moved_video": outcome.moved_video,
                 "detail": "%s as %s - %s" % (
                     "filed" if moved else "re-tagged in place",
                     outcome.tags.artist, outcome.tags.title)}

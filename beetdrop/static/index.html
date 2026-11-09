@@ -84,7 +84,11 @@
         <label v-if="searchType === 'lyrics'" class="wordpick">
           <input type="checkbox" v-model="lyricsWordByWord"> word-by-word
         </label>
-        <label v-else-if="searchType !== 'videos'" class="formatfield">
+        <label v-if="searchType === 'songs'" class="wordpick"
+               title="Also fetch the song's music video and put it beside the track, named so Plex links the two">
+          <input type="checkbox" v-model="grabWithVideo" @change="saveGrabWithVideo"> + music video
+        </label>
+        <label v-if="searchType !== 'videos' && searchType !== 'lyrics'" class="formatfield">
           <span class="label">Format</span>
           <select v-model="grabFormat" class="formatpick" aria-label="Format for grabs">
             <option value="">default</option>
@@ -318,7 +322,8 @@
         <div class="statcard">
           <span class="label">Artists</span>
           <span class="value">{{ stats.artists.toLocaleString() }}</span>
-          <span class="sub">{{ stats.videos }} music videos</span>
+          <span class="sub">{{ stats.videos }} music videos<template
+            v-if="stats.companion_videos"> &middot; {{ stats.companion_videos }} beside tracks</template></span>
         </div>
         <div class="statcard">
           <span class="label">On disk</span>

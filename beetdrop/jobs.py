@@ -15,11 +15,13 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
 from .backfill import backfill_lyrics
+from .companion import grab_companion
 from .config import Config, check_storage
 from .db import Store
-from .download import LogCollector
+from .download import LogCollector, download_video
 from .events import Broadcaster
 from .grab import failures_text, run_album_grab, run_grab, run_video_grab
+from .search import search_videos
 
 DEFAULT_CONCURRENCY = 2
 PROGRESS_MIN_INTERVAL = 0.5  # seconds between persisted progress updates
@@ -95,11 +97,11 @@ class JobManager:
             raise JobCancelled()
 
     def enqueue(self, video_id: str, fmt: str = "", bitrate: str = "",
-                kind: str = "track") -> dict:
+                kind: str = "track", with_video: bool = False) -> dict:
         config = self._config_provider()
         job = self._store.create_job(
             video_id, fmt or config.output_format, bitrate or config.bitrate,
-            kind=kind,
+            kind=kind, with_video=with_video and kind == "track",
         )
         self._publish(job)
         self._executor.submit(self._run, job["id"])
@@ -274,7 +276,12 @@ class JobManager:
                         job_id, title=result.title, artist=result.artist_display),
                     logger=collector,
                 )
+                detail = ""
+                if job.get("with_video"):
+                    detail = self._companion(job_id, config, outcome,
+                                             on_stage, on_progress, collector)
                 self._update(job_id, stage="done", progress=100.0,
+                             detail=detail[:2000],
                              log=collector.text()[:20000],
                              inbox_path=str(outcome.inbox_path),
                              inbox_state=audio_state(outcome.verified))
@@ -296,6 +303,31 @@ class JobManager:
                              log=collector.text()[:20000])
         finally:
             self._cancel_requested.discard(job_id)
+
+    def _companion(self, job_id, config, outcome, on_stage, on_progress,
+                   collector) -> str:
+        """Fetch the track's music video and file it beside the track.
+
+        Runs after the audio is filed, so whatever happens here the grab
+        that was asked for has already succeeded. Returns one line for the
+        job card saying what became of the video.
+        """
+        if not outcome.verified:
+            # Its title is YouTube's guess, and it will change when the
+            # match is fixed - a video named for it now would be named
+            # for nothing in Plex by then.
+            text = ("no music video: the track went to _review, so its "
+                    "title is not settled yet")
+            collector.add(text)
+            return text
+        on_stage("video")
+        self._update(job_id, progress=0.0)
+        found = grab_companion(config, outcome.inbox_path, outcome.tags,
+                               outcome.result, search=search_videos,
+                               download=download_video,
+                               on_progress=on_progress, logger=collector)
+        collector.add(found.detail)
+        return found.detail
 
     # -- plumbing --------------------------------------------------------------
 

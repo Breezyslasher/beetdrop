@@ -171,6 +171,29 @@ class TestApplyingAChoice:
             "[00:09.93]")
         assert not track.with_suffix(".lrc").exists()
 
+    def test_its_music_video_moves_with_it_under_the_new_title(self, tmp_path):
+        # Plex links a video to a track by title, so a video left under
+        # the old name in the old folder would be linked to nothing.
+        config = self._library(tmp_path)
+        track = self._unverified(config)
+        (track.parent / "Some Song-video.mp4").write_bytes(b"clip")
+        outcome = apply_choice(config, FakeMB(), track, "rec-1",
+                               "Some Song", "Unknown")
+        assert outcome.moved_video
+        assert (outcome.new_path.parent / "9 to 5-video.mp4").read_bytes() == b"clip"
+        # And the folder it left is empty, so it goes too.
+        assert not track.parent.exists()
+
+    def test_retagging_in_place_renames_the_video(self, tmp_path):
+        config = self._library(tmp_path)
+        track = self._unverified(config)
+        (track.parent / "Some Song-video.mp4").write_bytes(b"clip")
+        outcome = apply_choice(config, FakeMB(), track, "rec-1",
+                               "Some Song", "Unknown", move=False)
+        assert outcome.moved_video
+        assert (track.parent / "9 to 5-video.mp4").is_file()
+        assert not (track.parent / "Some Song-video.mp4").exists()
+
     def test_the_emptied_review_folder_is_removed(self, tmp_path):
         config = self._library(tmp_path)
         track = self._unverified(config)
