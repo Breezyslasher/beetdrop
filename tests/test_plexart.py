@@ -485,3 +485,54 @@ class TestThePictureShowing:
             assert result.unchanged == 1 and fake.uploads == [] and fake.selections == []
         finally:
             fake.close()
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+class TestNotSendingEverythingAgain:
+    """A real run sent all 732 again: pictures remembered by an older
+    version (the image's hash alone) were judged gone because Plex's list
+    did not look as expected. Without plain evidence, nothing is resent."""
+
+    def setup(self, tmp_path):
+        import hashlib
+        import json as _json
+        from beetdrop.plexart import STATE_FILE
+        music = tmp_path / "music"
+        video = music / "Weezer" / "Buddy Holly.mp4"
+        make_mp4(video)
+        embed_cover(video, JPEG, "image/jpeg")
+        fake = FakePlex({"100": [("500", "Buddy Holly",
+                                  "/srv/disk/Music/explo/Weezer/Buddy Holly.mp4")]},
+                        keeps_pictures=True)
+        config = Cfg(tmp_path, fake.url)
+        (config.config_dir / STATE_FILE).write_text(_json.dumps(
+            {fake.url: {"500": hashlib.sha1(JPEG).hexdigest()}}))
+        return fake, config
+
+    def test_an_older_record_is_trusted_whatever_plex_lists(self, tmp_path):
+        fake, config = self.setup(tmp_path)
+        try:
+            # However this server names or marks its pictures.
+            fake.pictures["500"] = [{"ratingKey": "something://else", "selected": True}]
+            result = send_artwork(config)
+            assert result.unchanged == 1 and result.resent == 0 and fake.uploads == []
+        finally:
+            fake.close()
+
+    def test_an_empty_list_is_trusted_too(self, tmp_path):
+        fake, config = self.setup(tmp_path)
+        try:
+            fake.pictures["500"] = []
+            result = send_artwork(config)
+            assert result.unchanged == 1 and fake.uploads == []
+        finally:
+            fake.close()
+
+    def test_what_plex_answered_is_kept_for_the_log(self, tmp_path):
+        fake, config = self.setup(tmp_path)
+        try:
+            result = send_artwork(config)
+            assert result.sample.startswith("GET /library/metadata/500/posters answered:")
+            assert "metadata://frame" in result.sample
+        finally:
+            fake.close()

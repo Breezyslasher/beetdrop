@@ -55,6 +55,9 @@ class PlexArt:
     not_mp4: int = 0       # a video Plex lists that is not an MP4 (.mkv, .webm...)
     # A few that were not found here, as Plex names them - to see why.
     missing: list = field(default_factory=list)
+    # What Plex answered for one item's pictures, for the log: how this
+    # server describes them is what the checks depend on.
+    sample: str = ""
     failed: int = 0
     reasons: Counter = field(default_factory=Counter)
     stopped: str = ""      # why it gave up part-way, if it did
@@ -194,10 +197,15 @@ def send_artwork(config, on_progress: Callable[[float], None] = _noop,
         try:
             listing = _container(_call("GET", url, token,
                                        "/library/metadata/%s/posters" % key))
-        except PlexError:
+        except PlexError as exc:
+            if not result.sample:
+                result.sample = "GET /library/metadata/%s/posters: %s" % (key, exc)
             return None
+        if not result.sample:
+            result.sample = "GET /library/metadata/%s/posters answered: %s" % (
+                key, json.dumps(listing)[:800])
         return [{"key": str(p.get("ratingKey") or p.get("key") or ""),
-                 "selected": bool(p.get("selected"))}
+                 "selected": str(p.get("selected", "")).lower() in ("1", "true")}
                 for p in listing.get("Metadata") or listing.get("Photo") or []
                 if p.get("ratingKey") or p.get("key")]
 
@@ -232,11 +240,13 @@ def send_artwork(config, on_progress: Callable[[float], None] = _noop,
         sent_digest, _, sent_picture = sent_here.get(key, "").partition("|")
         pictures = _pictures(key)
         if sent_digest == digest:
-            if pictures is None:
-                result.unchanged += 1      # cannot look; trust what was sent
+            # Sent before. Act only on what Plex plainly says; when it says
+            # nothing usable, trust what was sent - sending again on a
+            # misreading would send every picture on every run.
+            if not pictures or not sent_picture:
+                result.unchanged += 1
                 return True
-            ours = next((p for p in pictures if p["key"] == sent_picture), None) \
-                if sent_picture else None
+            ours = next((p for p in pictures if p["key"] == sent_picture), None)
             if ours is not None and ours["selected"]:
                 result.unchanged += 1
                 return True
@@ -245,13 +255,11 @@ def send_artwork(config, on_progress: Callable[[float], None] = _noop,
                 if _select(key, ours["key"]):
                     result.reselected += 1
                     on_detail("chose the artwork again for %s" % (title or here.name))
-                    return True
-            elif not sent_picture and any(p["selected"] and p["key"].startswith("upload://")
-                                          for p in pictures):
-                result.unchanged += 1      # sent by an older version; showing
+                else:
+                    result.unchanged += 1
                 return True
-            # Gone - Plex made the item anew when the file changed - or not
-            # chosen: send it again.
+            # Plex lists its pictures, and the one sent is not among them:
+            # gone with the item it was sent to. Send it again.
             result.resent += 1
         before = {p["key"] for p in pictures or []}
         try:
