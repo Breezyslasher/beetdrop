@@ -18,7 +18,7 @@ from typing import Optional
 JOB_COLUMNS = (
     "id", "video_id", "kind", "title", "artist", "format", "bitrate",
     "stage", "progress", "error", "detail", "log", "failed_tracks",
-    "inbox_path", "inbox_state", "created_at", "updated_at",
+    "inbox_path", "inbox_state", "created_at", "updated_at", "with_video",
 )
 
 # failed_tracks is a JSON list of {"n": track_number, "title", "reason"}
@@ -39,7 +39,8 @@ JOB_COLUMNS = (
 SETTING_KEYS = ("output_format", "bitrate", "password", "concurrency",
                 "music_root", "lyrics", "mxm_token", "lyrics_provider",
                 "video_root", "video_max_height",
-                "apple_token", "apple_storefront", "word_lyrics")
+                "apple_token", "apple_storefront", "word_lyrics",
+                "plex_url", "plex_token", "plex_music_path")
 
 
 class Store:
@@ -76,6 +77,9 @@ class Store:
                 ("detail", "TEXT NOT NULL DEFAULT ''"),
                 ("log", "TEXT NOT NULL DEFAULT ''"),
                 ("failed_tracks", "TEXT NOT NULL DEFAULT ''"),
+                # A track grab that also fetches its music video and files
+                # it beside the track for Plex.
+                ("with_video", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 if column not in existing:
                     self._db.execute(
@@ -214,14 +218,16 @@ class Store:
 
     # -- jobs ----------------------------------------------------------------
 
-    def create_job(self, video_id: str, fmt: str, bitrate: str, kind: str = "track") -> dict:
+    def create_job(self, video_id: str, fmt: str, bitrate: str, kind: str = "track",
+                   with_video: bool = False) -> dict:
         job_id = uuid.uuid4().hex[:12]
         now = time.time()
         with self._lock:
             self._db.execute(
                 "INSERT INTO jobs (id, video_id, kind, format, bitrate, stage,"
-                " created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)",
-                (job_id, video_id, kind, fmt, bitrate, now, now),
+                " created_at, updated_at, with_video)"
+                " VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
+                (job_id, video_id, kind, fmt, bitrate, now, now, int(bool(with_video))),
             )
             self._db.commit()
         return self.get_job(job_id)

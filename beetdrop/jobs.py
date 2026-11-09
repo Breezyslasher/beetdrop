@@ -15,11 +15,14 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
 from .backfill import backfill_lyrics
+from .companion import grab_companion
 from .config import Config, check_storage
 from .db import Store
-from .download import LogCollector
+from .download import LogCollector, download_video
 from .events import Broadcaster
 from .grab import failures_text, run_album_grab, run_grab, run_video_grab
+from .plex import scan_folder
+from .search import search_videos
 
 DEFAULT_CONCURRENCY = 2
 PROGRESS_MIN_INTERVAL = 0.5  # seconds between persisted progress updates
@@ -95,11 +98,11 @@ class JobManager:
             raise JobCancelled()
 
     def enqueue(self, video_id: str, fmt: str = "", bitrate: str = "",
-                kind: str = "track") -> dict:
+                kind: str = "track", with_video: bool = False) -> dict:
         config = self._config_provider()
         job = self._store.create_job(
             video_id, fmt or config.output_format, bitrate or config.bitrate,
-            kind=kind,
+            kind=kind, with_video=with_video and kind == "track",
         )
         self._publish(job)
         self._executor.submit(self._run, job["id"])
@@ -212,6 +215,8 @@ class JobManager:
                                % result.deferred)
                 self._update(job_id, stage="done", progress=100.0,
                              detail=detail[:2000], log=collector.text()[:20000])
+                if result.added or result.upgraded or result.purged:
+                    self._tell_plex(job_id, config, config.music_root)
                 return
             if job["kind"] == "musicvideo":
                 # The video root is a subfolder we create on first use; make
@@ -229,6 +234,7 @@ class JobManager:
                              log=collector.text()[:20000],
                              inbox_path=str(outcome.inbox_path),
                              inbox_state=audio_state(outcome.verified))
+                self._tell_plex(job_id, config, outcome.inbox_path.parent)
                 return
             check_storage(config.music_root, config.min_free_mb)
             if job["kind"] == "album":
@@ -265,6 +271,9 @@ class JobManager:
                              failed_tracks=json.dumps(outcome.failed) if outcome.failed else "",
                              inbox_path=str(outcome.inbox_path),
                              inbox_state=audio_state(outcome.verified))
+                # One scan for the album folder, not one per track.
+                if outcome.delivered:
+                    self._tell_plex(job_id, config, outcome.inbox_path)
             else:
                 outcome = run_grab(
                     job["video_id"], config,
@@ -274,10 +283,17 @@ class JobManager:
                         job_id, title=result.title, artist=result.artist_display),
                     logger=collector,
                 )
+                detail = ""
+                if job.get("with_video"):
+                    detail = self._companion(job_id, config, outcome,
+                                             on_stage, on_progress, collector)
                 self._update(job_id, stage="done", progress=100.0,
+                             detail=detail[:2000],
                              log=collector.text()[:20000],
                              inbox_path=str(outcome.inbox_path),
                              inbox_state=audio_state(outcome.verified))
+                # The album folder, which also holds a companion video.
+                self._tell_plex(job_id, config, outcome.inbox_path.parent)
         except JobCancelled:
             collector.add("cancelled by user")
             self._update(job_id, stage="cancelled", error="cancelled by user",
@@ -296,6 +312,49 @@ class JobManager:
                              log=collector.text()[:20000])
         finally:
             self._cancel_requested.discard(job_id)
+
+    def _tell_plex(self, job_id: str, config, folder) -> None:
+        """Ask Plex to scan what this job just filed, and add how that
+        went to the job card.
+
+        After the job is already marked done: the grab succeeded whatever
+        Plex says, and a server that is slow to answer must not leave a
+        finished grab looking unfinished.
+        """
+        try:
+            line = scan_folder(config, folder)
+        except Exception as exc:
+            line = "Plex was not told: %s" % exc
+        if not line:
+            return
+        job = self._store.get_job(job_id) or {}
+        detail = job.get("detail") or ""
+        self._update(job_id, detail=((detail + "; ") if detail else "") + line)
+
+    def _companion(self, job_id, config, outcome, on_stage, on_progress,
+                   collector) -> str:
+        """Fetch the track's music video and file it beside the track.
+
+        Runs after the audio is filed, so whatever happens here the grab
+        that was asked for has already succeeded. Returns one line for the
+        job card saying what became of the video.
+        """
+        if not outcome.verified:
+            # Its title is YouTube's guess, and it will change when the
+            # match is fixed - a video named for it now would be named
+            # for nothing in Plex by then.
+            text = ("no music video: the track went to _review, so its "
+                    "title is not settled yet")
+            collector.add(text)
+            return text
+        on_stage("video")
+        self._update(job_id, progress=0.0)
+        found = grab_companion(config, outcome.inbox_path, outcome.tags,
+                               outcome.result, search=search_videos,
+                               download=download_video,
+                               on_progress=on_progress, logger=collector)
+        collector.add(found.detail)
+        return found.detail
 
     # -- plumbing --------------------------------------------------------------
 

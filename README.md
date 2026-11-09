@@ -147,6 +147,76 @@ video library is a `Music Videos` subfolder of `/music`, so no extra mount
 is needed; set `VIDEO_PATH` (or the Settings field) to put it on its own
 disk. Max quality is set with `BEETDROP_VIDEO_MAX_HEIGHT` or in Settings.
 
+### A song's video, beside the song (Plex)
+
+Plex is the other way round: it reads music videos inside a music
+library, as extras linked to the track they belong to. Tick **+ music
+video** on the Songs search and a grab also finds that song's video and
+files it in the album folder under the track's title with Plex's
+`-video` suffix:
+
+```
+Artist/Album (2013)/03 - Song.opus
+Artist/Album (2013)/Song-video.mp4
+```
+
+It is named for the track's *title*, not its filename - Plex matches the
+title it shows, and the `03 - ` is only how Beetdrop names the audio.
+
+Finding the right video is strict on identity and loose on length. A
+wrong video beside a track is worse than none, because Plex presents it
+as that song, so anything that is not the same recording by the same
+artist is refused: live, remix and acoustic takes, "Official Audio"
+uploads (a still image over the track), lyric videos, visualizers,
+covers by someone else. Length is allowed a long way over - videos carry
+intros, dance breaks and credits - but not much under, since a shorter
+video is a radio edit or a different song.
+
+It is always best effort. The audio is what was asked for, so a video
+that cannot be found or fetched never fails the grab; the job card says
+what happened to it. Tracks only - an album would mean a search per
+track, and most album tracks have no video. A grab that went to
+`_review/` gets none, because its title is YouTube's guess and will
+change when the match is fixed; fixing a match carries an existing video
+along and renames it for the new title. Stats counts these apart from the
+Kodi-style library.
+
+The `-video` naming follows Plex's documented convention for music
+extras rather than a test against a live server, so it is worth one grab
+and a look in Plex before relying on it. If Plex wants it spelled
+differently, it is one function (`plex_video_filename` in
+`companion.py`).
+
+## Telling Plex
+
+Plex notices new files on its own schedule - a periodic scan, or a
+filesystem watcher that often does not fire across a network share or a
+container mount - so a grab can sit on disk for hours before it appears.
+Give Beetdrop your Plex server's address and token in Settings and, when
+a job finishes, it asks Plex for a partial scan of exactly the folder it
+filed into: the same request Sonarr and Lidarr make. Never the whole
+library; an album is one scan, not one per track; a lyrics pass that
+changed something scans the music library once at the end.
+
+Beetdrop and Plex usually see the same files at different paths - `/music`
+here, `/data/music` in Plex's container. "Where Plex sees the music
+folder" maps one onto the other; **Save and test Plex** lists every
+folder Plex knows about, so the right value can be copied rather than
+guessed. The token is stored on the server like the Apple token and never
+sent back to the page.
+
+Requests follow Plex's published OpenAPI description: `GET
+/library/sections/all` to find the library, `POST
+/library/sections/{id}/refresh?path=...` to scan the folder, token in the
+`X-Plex-Token` header. A server older than that API, which only answers
+the bare `/library/sections`, is handled too.
+
+It is best effort: a Plex that is off or unreachable is noted on the job
+card and never fails a grab. One Plex refusal worth knowing: a server
+signed out of plex.tv will not refresh a music library, and the job card
+says so rather than reporting a bare HTTP 503. Env: `BEETDROP_PLEX_URL`,
+`BEETDROP_PLEX_TOKEN`, `BEETDROP_PLEX_MUSIC_PATH`.
+
 ## Fixing a wrong match
 
 There is no acoustic fingerprinting, so a cover or a same-length
@@ -228,6 +298,7 @@ GET/PUT /api/settings             GET /api/health   GET /events (SSE)
 POST /api/login                   POST /api/ytdlp/update
 POST /api/lyrics/musixmatch-token POST /api/lyrics/scan
 POST /api/lyrics/tag-sources      GET  /api/library  GET /api/stats
+POST /api/plex/test
 ```
 
 ## Running it
@@ -243,7 +314,9 @@ library), set PUID/PGID to the library owner. Environment variables:
 `BEETDROP_LYRICS`, `BEETDROP_LYRICS_PROVIDER` (lrclib|musixmatch|apple),
 `BEETDROP_MXM_TOKEN` (Musixmatch token), `BEETDROP_APPLE_TOKEN`
 (Apple Music media-user-token), `BEETDROP_APPLE_STOREFRONT` (default us),
-`BEETDROP_WORD_LYRICS` (per-word timing, default off), `VIDEO_PATH` (music-video
+`BEETDROP_WORD_LYRICS` (per-word timing, default off), `BEETDROP_PLEX_URL`,
+`BEETDROP_PLEX_TOKEN`, `BEETDROP_PLEX_MUSIC_PATH` (scan Plex after each
+grab), `VIDEO_PATH` (music-video
 library; defaults to a subfolder of /music), `BEETDROP_VIDEO_MAX_HEIGHT`
 (video quality cap in px, default 1080, 0 = uncapped), `BEETDROP_TRACK_DELAY`,
 `BEETDROP_MIN_FREE_MB`, `BEETDROP_KEEP_JOBS`, `BEETDROP_KEEP_DAYS`,

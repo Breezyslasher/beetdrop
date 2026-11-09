@@ -84,7 +84,11 @@
         <label v-if="searchType === 'lyrics'" class="wordpick">
           <input type="checkbox" v-model="lyricsWordByWord"> word-by-word
         </label>
-        <label v-else-if="searchType !== 'videos'" class="formatfield">
+        <label v-if="searchType === 'songs'" class="wordpick"
+               title="Also fetch the song's music video and put it beside the track, named so Plex links the two">
+          <input type="checkbox" v-model="grabWithVideo" @change="saveGrabWithVideo"> + music video
+        </label>
+        <label v-if="searchType !== 'videos' && searchType !== 'lyrics'" class="formatfield">
           <span class="label">Format</span>
           <select v-model="grabFormat" class="formatpick" aria-label="Format for grabs">
             <option value="">default</option>
@@ -318,7 +322,8 @@
         <div class="statcard">
           <span class="label">Artists</span>
           <span class="value">{{ stats.artists.toLocaleString() }}</span>
-          <span class="sub">{{ stats.videos }} music videos</span>
+          <span class="sub">{{ stats.videos }} music videos<template
+            v-if="stats.companion_videos"> &middot; {{ stats.companion_videos }} beside tracks</template></span>
         </div>
         <div class="statcard">
           <span class="label">On disk</span>
@@ -975,6 +980,65 @@
     <div class="jobactions" v-if="settings && settings.cookies_set">
       <button type="button" @click="clearCookies">Clear cookies</button>
     </div>
+
+    <h3>Plex</h3>
+
+    <label>Plex server address
+      <input v-model="draft.plex_url" type="url" spellcheck="false"
+             autocomplete="off" placeholder="http://192.168.1.10:32400">
+    </label>
+    <label>Plex token
+      <input v-model="draft.plex_token" type="password" spellcheck="false"
+             autocomplete="off"
+             :placeholder="settings && settings.plex_token_set
+                           ? 'a token is saved - paste a new one to replace it'
+                           : 'paste your X-Plex-Token'">
+    </label>
+    <label>Where Plex sees the music folder
+      <input v-model="draft.plex_music_path" type="text" spellcheck="false"
+             autocomplete="off"
+             :placeholder="settings ? settings.music_root + ' (same as here)' : ''">
+    </label>
+    <div class="jobactions">
+      <button type="button" @click="testPlex" :disabled="testingPlex">
+        {{ testingPlex ? 'Checking...' : 'Save and test Plex' }}
+      </button>
+    </div>
+    <template v-if="plexStatus">
+      <p class="note" :class="{warntext: !plexStatus.ok}">{{ plexStatus.detail }}</p>
+      <p v-if="plexStatus.libraries && plexStatus.libraries.length" class="note">
+        Plex's libraries:
+        <template v-for="(lib, i) in plexStatus.libraries" :key="lib.title">
+          <template v-if="i">; </template>
+          <strong>{{ lib.title }}</strong> ({{ lib.type }}) at
+          <code>{{ lib.locations.join(', ') }}</code>
+        </template>
+      </p>
+    </template>
+    <details class="explain">
+      <summary>What does this do, and where is the token?</summary>
+      <p class="note">
+        When a grab finishes, Beetdrop asks Plex to scan just the folder it
+        filed into, so the track - and its music video, if you grabbed one -
+        shows up in Plex straight away instead of whenever Plex next scans
+        on its own. It never rescans the whole library, and a Plex that is
+        off or unreachable is noted on the job card without failing the
+        grab. Leave the address blank to turn it off.
+      </p>
+      <p class="note">
+        The token: in Plex's web app, open any track, choose Get Info, then
+        View XML. The address of the page that opens ends in
+        X-Plex-Token=&hellip; - everything after the equals sign is the
+        token. It is saved on the server and never sent back to this page.
+      </p>
+      <p class="note">
+        "Where Plex sees the music folder" matters when Plex runs in its own
+        container or on another machine. If Beetdrop's music folder is
+        /music but Plex was given the same files as /data/music, put
+        /data/music here. Save and test lists the folders Plex knows about,
+        so you can copy the right one.
+      </p>
+    </details>
 
     <h3>Access &amp; updates</h3>
 

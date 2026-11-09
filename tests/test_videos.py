@@ -239,7 +239,8 @@ class TestVideoApi:
         config = self.make_config(tmp_path)
         captured = {}
         monkeypatch.setattr(app_module.JobManager, "enqueue",
-                            lambda self, vid, fmt="", bitrate="", kind="track":
+                            lambda self, vid, fmt="", bitrate="", kind="track",
+                            with_video=False:
                             captured.update(vid=vid, kind=kind) or
                             {"id": "j1", "video_id": vid, "kind": kind})
         with TestClient(create_app(config)) as client:

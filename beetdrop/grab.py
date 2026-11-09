@@ -47,6 +47,9 @@ class GrabOutcome:
     inbox_path: Path  # final library path (column name kept for history)
     result: Result
     verified: bool = True  # False means filed under _review
+    # What the track was filed as - a companion music video is named for
+    # this title, since it is the one Plex shows.
+    tags: Optional[FullTags] = None
 
 
 def _noop(*args) -> None:
@@ -163,7 +166,7 @@ def run_grab(
         final = _finish_into_library(config, audio_path, tags, cover,
                                      result.duration_seconds)
         return GrabOutcome(inbox_path=final, result=result,
-                           verified=resolution.matched)
+                           verified=resolution.matched, tags=tags)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 

@@ -63,6 +63,9 @@ class GrabRequest(BaseModel):
     format: str = ""
     bitrate: str = ""
     force: bool = False  # grab even when it was already grabbed
+    # Also fetch the track's music video and file it beside the track,
+    # named the way Plex links a video to a track. Tracks only.
+    with_video: bool = False
 
 
 class SettingsUpdate(BaseModel):
@@ -80,6 +83,9 @@ class SettingsUpdate(BaseModel):
     apple_token: Optional[str] = None  # "" clears
     apple_storefront: Optional[str] = None
     word_lyrics: Optional[bool] = None
+    plex_url: Optional[str] = None
+    plex_token: Optional[str] = None  # "" clears; never sent back
+    plex_music_path: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -296,7 +302,14 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
                     "existing_job": {k: duplicate[k] for k in
                                      ("id", "title", "artist", "stage", "created_at")},
                 })
-        job = manager.enqueue(video_id, body.format, body.bitrate, kind=body.kind)
+        if body.with_video and body.kind != "track":
+            # An album would mean a search per track, and most album
+            # tracks have no video - the closest match would be wrong
+            # more often than right.
+            raise HTTPException(status_code=422,
+                                detail="with_video is for single tracks only")
+        job = manager.enqueue(video_id, body.format, body.bitrate, kind=body.kind,
+                              with_video=body.with_video)
         return job
 
     @app.get("/api/jobs", dependencies=[protected])
@@ -333,6 +346,11 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             "lyrics_provider": config.lyrics_provider,
             "musixmatch_token_set": bool(config.musixmatch_token),
             "apple_token_set": bool(config.apple_token),
+            "plex_url": config.plex_url,
+            # Like the Apple token, only whether one is set: a Plex token
+            # is the whole account, and the page never needs to read it.
+            "plex_token_set": bool(config.plex_token),
+            "plex_music_path": config.plex_music_path,
             "apple_storefront": config.apple_storefront,
             "word_lyrics": config.word_lyrics,
             "video_root": str(config.video_root),
@@ -373,11 +391,24 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
                 detail="lyrics_provider must be one of %s" % (LYRICS_PROVIDERS,))
         updates = {k: v for k, v in body.model_dump().items()
                    if v is not None and k not in ("cookies", "musixmatch_token",
-                                                  "apple_token", "word_lyrics")}
+                                                  "apple_token", "word_lyrics",
+                                                  "plex_token")}
         if body.word_lyrics is not None:
             updates["word_lyrics"] = "1" if body.word_lyrics else "0"
         if body.apple_token is not None:
             updates["apple_token"] = body.apple_token.strip()
+        if body.plex_token is not None:
+            updates["plex_token"] = body.plex_token.strip()
+        if body.plex_url is not None:
+            url = body.plex_url.strip().rstrip("/")
+            if url and not url.startswith(("http://", "https://")):
+                raise HTTPException(
+                    status_code=422,
+                    detail="the Plex address needs http:// or https://, "
+                           "e.g. http://192.168.1.10:32400")
+            updates["plex_url"] = url
+        if body.plex_music_path is not None:
+            updates["plex_music_path"] = body.plex_music_path.strip()
         if "lyrics" in updates:
             updates["lyrics"] = "1" if updates["lyrics"] else "0"
         if body.musixmatch_token is not None:
@@ -508,6 +539,14 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
         applesignin.AppleSignIn(base.config_dir).clear_session()
         store.set_settings({"apple_token": ""})
         return {"ok": True, "detail": "Apple session and token cleared"}
+
+    @app.post("/api/plex/test", dependencies=[protected])
+    async def api_plex_test():
+        """Can Plex be reached, and which library will grabs be scanned
+        into. Lists Plex's own folder paths, which is the quickest way to
+        see what "where Plex sees the music folder" should say."""
+        from . import plex
+        return await asyncio.to_thread(plex.check, effective_config())
 
     @app.post("/api/lyrics/apple-test", dependencies=[protected])
     async def api_apple_test():
@@ -815,8 +854,8 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
     @app.get("/api/stats", dependencies=[protected])
     async def api_stats():
         """Library health, in one read of the tree plus the jobs table."""
-        from .libraryview import (count_videos, grab_history, scan_albums,
-                                  summarise)
+        from .libraryview import (count_companion_videos, count_videos,
+                                  grab_history, scan_albums, summarise)
 
         config = effective_config()
 
@@ -824,6 +863,10 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             albums = scan_albums(config.music_root)
             totals = summarise(albums)
             totals["videos"] = count_videos(config.video_root)
+            # Videos filed beside their tracks for Plex, counted apart so
+            # the card can say which kind is which.
+            totals["companion_videos"] = count_companion_videos(
+                config.music_root, config.video_root)
             totals["bytes_free"] = int(storage_free_mb(config.music_root) or 0) * 1024 * 1024
             # bad_timing and crowded come out of summarise now. They used
             # to need a second walk of the tree and a second read of
@@ -948,6 +991,7 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
         moved = outcome.new_path != outcome.old_path
         return {"ok": True, "path": str(outcome.new_path), "moved": moved,
                 "moved_lyrics": outcome.moved_lyrics,
+                "moved_video": outcome.moved_video,
                 "detail": "%s as %s - %s" % (
                     "filed" if moved else "re-tagged in place",
                     outcome.tags.artist, outcome.tags.title)}

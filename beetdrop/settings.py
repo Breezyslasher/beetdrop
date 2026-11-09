@@ -61,6 +61,13 @@ def apply_stored_settings(base: Config, stored: dict,
         config.apple_storefront = stored["apple_storefront"]
     if stored.get("word_lyrics") in ("0", "1"):
         config.word_lyrics = stored["word_lyrics"] == "1"
+    if stored.get("plex_url"):
+        config.plex_url = stored["plex_url"]
+    if stored.get("plex_token"):
+        config.plex_token = stored["plex_token"]
+    if "plex_music_path" in stored:
+        # Clearable: blank means Plex sees the library where we do.
+        config.plex_music_path = stored["plex_music_path"]
     if stored.get("video_root") and not video_locked:
         config.video_root = Path(stored["video_root"])
     if stored.get("video_max_height"):

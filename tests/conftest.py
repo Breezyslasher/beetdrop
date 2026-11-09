@@ -6,9 +6,16 @@ happens to hold that day. Any outbound request is therefore an error,
 and a test that wants network behaviour stubs the specific call it needs.
 """
 
+from urllib.parse import urlparse
+
 import pytest
 
 import requests
+
+# The real thing, captured before any test replaces it, for the one
+# fixture below that lets a request through.
+_REAL_SESSION_REQUEST = requests.Session.request
+_LOOPBACK = ("127.0.0.1", "localhost", "::1")
 
 
 class NetworkUsedInTest(RuntimeError):
@@ -31,3 +38,25 @@ def no_network(monkeypatch):
     for name in ("get", "post", "put", "delete", "head", "request"):
         monkeypatch.setattr(requests, name, blocked)
     monkeypatch.setattr(requests.Session, "request", blocked)
+
+
+@pytest.fixture
+def loopback_only(monkeypatch):
+    """Let requests reach a fake server this test started on 127.0.0.1.
+
+    Opt-in, and only loopback: an in-process server is as hermetic as a
+    stub, and is the only way to check the request a client actually
+    sends - path, query, headers - rather than the one the test assumes.
+    Anything else is still refused exactly as no_network refuses it.
+    """
+    def guarded(self, method, url, *args, **kwargs):
+        if urlparse(url).hostname not in _LOOPBACK:
+            raise NetworkUsedInTest(
+                "test made a real HTTP request to %s - stub it instead" % (url,))
+        return _REAL_SESSION_REQUEST(self, method, url, *args, **kwargs)
+
+    monkeypatch.setattr(requests.Session, "request", guarded)
+    # The module-level helpers all go through Session.request, so putting
+    # them back routes them through the guard above.
+    for name in ("get", "post", "put", "delete", "head", "request"):
+        monkeypatch.setattr(requests, name, getattr(requests.api, name))
