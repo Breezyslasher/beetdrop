@@ -60,12 +60,18 @@ class FakePlex:
     """
 
     def __init__(self, artists, refuse_uploads=False, refuse_refresh=False,
-                 tracks=(), items=()):
+                 tracks=(), items=(), keeps_pictures=False):
         # artists: {artist_key: [(extra_key, title, plex_file), ...]}
         # tracks: [(track_key, title, audio_plex_file, extra_key or None)]
         self.artists = artists
         self.tracks = list(tracks)
         self.items = dict(items)      # {extra_key: plex_file} for GET /library/metadata/{id}
+        # keeps_pictures: a list of pictures per item, GET .../posters,
+        # where an upload is added but - like the real server, sometimes -
+        # not chosen, and PUT .../poster?url= chooses one.
+        self.keeps_pictures = keeps_pictures
+        self.pictures = {}            # {item: [{"ratingKey", "selected"}]}
+        self.selections = []
         self.uploads = []
         self.refreshes = []
         self.refuse_uploads = refuse_uploads
@@ -116,6 +122,11 @@ class FakePlex:
                     return self._reply(200, {"MediaContainer": {"Metadata": [
                         {"ratingKey": parts[3], "type": "clip",
                          "Media": [{"Part": [{"file": fake.items[parts[3]]}]}]}]}})
+                if (fake.keeps_pictures and url.path.startswith("/library/metadata/")
+                        and parts[-1] == "posters"):
+                    return self._reply(200, {"MediaContainer": {"Metadata": [
+                        dict(p) for p in fake.pictures.setdefault(
+                            parts[3], [{"ratingKey": "metadata://frame", "selected": True}])]}})
                 if url.path.startswith("/library/metadata/") and parts[-1] == "extras":
                     extras = fake.artists.get(parts[3], [])
                     return self._reply(200, {"MediaContainer": {"Metadata": [
@@ -136,13 +147,28 @@ class FakePlex:
                     if fake.refuse_uploads:
                         return self._reply(404)
                     fake.uploads.append((parts[3], body, self.headers.get("Content-Type")))
+                    if fake.keeps_pictures:
+                        listed = fake.pictures.setdefault(
+                            parts[3], [{"ratingKey": "metadata://frame", "selected": True}])
+                        listed.append({"ratingKey": "upload://posters/%d" % len(fake.uploads),
+                                       "selected": False})
                     return self._reply(200)
                 self._reply(404)
 
             def do_PUT(self):
                 if not self._ok():
                     return
-                parts = urlparse(self.path).path.split("/")
+                url = urlparse(self.path)
+                parts = url.path.split("/")
+                if url.path.startswith("/library/metadata/") and parts[-1] == "poster":
+                    chosen = parse_qs(url.query).get("url", [""])[0]
+                    listed = fake.pictures.get(parts[3], [])
+                    if not any(p["ratingKey"] == chosen for p in listed):
+                        return self._reply(404)
+                    for p in listed:
+                        p["selected"] = p["ratingKey"] == chosen
+                    fake.selections.append((parts[3], chosen))
+                    return self._reply(200)
                 if self.path.startswith("/library/metadata/") and parts[-1] == "refresh":
                     if fake.refuse_refresh:
                         return self._reply(404)
@@ -395,3 +421,67 @@ def test_a_linked_video_named_unlike_its_song_is_asked_of_plex(tmp_path):
         assert (result.sent, result.not_mp4, result.not_here) == (1, 1, 0)
     finally:
         fake.close()
+
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+class TestThePictureShowing:
+    """Uploading adds a picture to an item's choices; Plex does not always
+    show it, and makes the item anew when its file changes."""
+
+    def setup(self, tmp_path, **kw):
+        music = tmp_path / "music"
+        video = music / "Weezer" / "Buddy Holly.mp4"
+        make_mp4(video)
+        embed_cover(video, JPEG, "image/jpeg")
+        fake = FakePlex({"100": [("500", "Buddy Holly",
+                                  "/srv/disk/Music/explo/Weezer/Buddy Holly.mp4")]},
+                        keeps_pictures=True, **kw)
+        return fake, Cfg(tmp_path, fake.url)
+
+    def test_an_upload_plex_did_not_choose_is_chosen(self, tmp_path):
+        fake, config = self.setup(tmp_path)
+        try:
+            result = send_artwork(config)
+            assert result.sent == 1
+            assert fake.selections == [("500", "upload://posters/1")]
+            assert [p for p in fake.pictures["500"] if p["selected"]] == [
+                {"ratingKey": "upload://posters/1", "selected": True}]
+        finally:
+            fake.close()
+
+    def test_sent_before_but_not_showing_is_chosen_again(self, tmp_path):
+        fake, config = self.setup(tmp_path)
+        try:
+            send_artwork(config)
+            # Plex went back to a frame of the video.
+            for p in fake.pictures["500"]:
+                p["selected"] = p["ratingKey"] == "metadata://frame"
+            fake.uploads.clear()
+            result = send_artwork(config)
+            assert (result.reselected, result.sent) == (1, 0) and fake.uploads == []
+            assert fake.selections[-1] == ("500", "upload://posters/1")
+        finally:
+            fake.close()
+
+    def test_sent_before_but_gone_from_plex_is_sent_again(self, tmp_path):
+        fake, config = self.setup(tmp_path)
+        try:
+            send_artwork(config)
+            # The file changed and Plex made the item anew: our picture is gone.
+            fake.pictures["500"] = [{"ratingKey": "metadata://frame", "selected": True}]
+            result = send_artwork(config)
+            assert (result.sent, result.resent) == (1, 1)
+        finally:
+            fake.close()
+
+    def test_showing_is_left_alone(self, tmp_path):
+        fake, config = self.setup(tmp_path)
+        try:
+            send_artwork(config)
+            fake.uploads.clear()
+            fake.selections.clear()
+            result = send_artwork(config)
+            assert result.unchanged == 1 and fake.uploads == [] and fake.selections == []
+        finally:
+            fake.close()
