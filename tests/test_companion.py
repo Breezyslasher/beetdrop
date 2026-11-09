@@ -12,7 +12,7 @@ from beetdrop.companion import (
     grab_companion,
     pick_music_video,
     plex_video_filename,
-    rename_title_named,
+    rename_to_track_names,
 )
 from beetdrop.config import Config
 from beetdrop.fulltags import FullTags
@@ -49,20 +49,23 @@ SONG = dict(title="9 to 5", artist="Dolly Parton", duration=161)
 
 
 class TestThePlexName:
-    # Plex links a video to a track when its name starts with the track's
-    # exact filename and ends in a type suffix, in the same folder.
-    def test_it_is_the_audio_filename_with_the_video_suffix(self):
-        assert plex_video_filename("01 - 9 to 5.opus") == "01 - 9 to 5-video.mp4"
+    # A real Plex links a video to a track when it has the track's own
+    # file name, in the same folder - not the "-video" form, which made
+    # an artist-level extra instead.
+    def test_it_is_the_audio_filename_with_the_videos_extension(self):
+        assert plex_video_filename("01 - 9 to 5.opus") == "01 - 9 to 5.mp4"
 
     def test_a_disc_prefix_is_kept(self):
-        assert plex_video_filename("2-03 - Jolene.flac") == "2-03 - Jolene-video.mp4"
+        assert plex_video_filename("2-03 - Jolene.flac") == "2-03 - Jolene.mp4"
 
     def test_an_unnumbered_track(self):
-        assert plex_video_filename("Jolene.opus") == "Jolene-video.mp4"
+        assert plex_video_filename("Jolene.opus") == "Jolene.mp4"
 
-    def test_the_suffix_is_never_left_off(self):
-        # A bare "01 - 9 to 5.mp4" is not read as a music video.
-        assert plex_video_filename("01 - 9 to 5.opus") != "01 - 9 to 5.mp4"
+    def test_no_suffix(self):
+        assert "-video" not in plex_video_filename("01 - 9 to 5.opus")
+
+    def test_audio_that_is_itself_mp4_cannot_share_its_name(self):
+        assert plex_video_filename("01 - Song.mp4") == "01 - Song-video.mp4"
 
 
 class TestPickingTheVideo:
@@ -171,7 +174,7 @@ class TestGrabbingIt:
             search=lambda q: [video("Dolly Parton - 9 to 5 (Official Video)",
                                     seconds=175)],
             download=self.downloader(calls))
-        assert found.path == audio.parent / "01 - 9 to 5-video.mp4"
+        assert found.path == audio.parent / "01 - 9 to 5.mp4"
         assert found.path.is_file() and calls == ["v1"]
         # Nothing half-written or left in scratch.
         assert not list(audio.parent.glob(".*beetdrop-tmp"))
@@ -179,10 +182,10 @@ class TestGrabbingIt:
             (tmp_path / "scratch").iterdir())
 
     def test_a_track_that_already_has_one_is_left_alone(self, tmp_path):
-        # A second copy would be "01 - 9 to 5-video (2).mp4", which Plex
-        # reads as nothing; the first video stays and nothing is downloaded.
+        # A second copy would be "01 - 9 to 5 (2).mp4", which Plex links
+        # to nothing; the first video stays and nothing is downloaded.
         audio = library_track(tmp_path)
-        existing = audio.parent / "01 - 9 to 5-video.mp4"
+        existing = audio.parent / "01 - 9 to 5.mp4"
         existing.write_bytes(b"theirs")
         calls = []
         found = grab_companion(FakeConfig(tmp_path), audio, TAGS, RESULT,
@@ -191,17 +194,18 @@ class TestGrabbingIt:
         assert calls == [] and existing.read_bytes() == b"theirs"
         assert "already" in found.detail
 
-    def test_one_an_earlier_version_named_for_the_title_is_renamed(self, tmp_path):
-        # 0.65-0.67 filed "9 to 5-video.mp4", which Plex links to nothing.
+    @pytest.mark.parametrize("old_name", ["9 to 5-video.mp4", "01 - 9 to 5-video.mp4"])
+    def test_one_an_earlier_version_filed_is_renamed(self, tmp_path, old_name):
+        # 0.65-0.67 named it for the title, 0.68-0.72 with "-video".
         audio = library_track(tmp_path)
-        (audio.parent / "9 to 5-video.mp4").write_bytes(b"old")
+        (audio.parent / old_name).write_bytes(b"old")
         calls = []
         found = grab_companion(FakeConfig(tmp_path), audio, TAGS, RESULT,
                                search=lambda q: pytest.fail("searched anyway"),
                                download=self.downloader(calls))
         assert calls == []
-        assert (audio.parent / "01 - 9 to 5-video.mp4").read_bytes() == b"old"
-        assert not (audio.parent / "9 to 5-video.mp4").exists()
+        assert (audio.parent / "01 - 9 to 5.mp4").read_bytes() == b"old"
+        assert not (audio.parent / old_name).exists()
         assert "renamed" in found.detail
 
     def test_no_match_downloads_nothing(self, tmp_path):
@@ -235,7 +239,7 @@ class TestGrabbingIt:
                                     seconds=175)],
             download=broken)
         assert found.path is None and "403" in found.detail
-        assert not (audio.parent / "01 - 9 to 5-video.mp4").exists()
+        assert not (audio.parent / "01 - 9 to 5.mp4").exists()
         scratch = tmp_path / "scratch"
         assert not scratch.exists() or not any(scratch.iterdir())
 
@@ -245,25 +249,26 @@ class TestCarryingItAlong:
         old_dir = tmp_path / "_review" / "Unknown - Some Song"
         new_dir = tmp_path / "Dolly Parton" / "9 to 5 and Odd Jobs (1980)"
         old_dir.mkdir(parents=True)
-        (old_dir / "Some Song-video.mp4").write_bytes(b"clip")
+        (old_dir / "Some Song.mp4").write_bytes(b"clip")
         moved = carry_companion(old_dir / "Some Song.opus", "Some Song",
                                 new_dir / "01 - 9 to 5.opus")
-        assert moved == new_dir / "01 - 9 to 5-video.mp4"
+        assert moved == new_dir / "01 - 9 to 5.mp4"
         assert moved.read_bytes() == b"clip"
-        assert not (old_dir / "Some Song-video.mp4").exists()
+        assert not (old_dir / "Some Song.mp4").exists()
 
-    def test_one_named_for_the_old_title_is_found_too(self, tmp_path):
-        (tmp_path / "Some Song-video.mp4").write_bytes(b"clip")
+    @pytest.mark.parametrize("old_name", ["Some Song-video.mp4", "track-video.mp4"])
+    def test_one_under_an_earlier_name_is_found_too(self, tmp_path, old_name):
+        (tmp_path / old_name).write_bytes(b"clip")
         moved = carry_companion(tmp_path / "track.opus", "Some Song",
                                 tmp_path / "01 - 9 to 5.opus")
-        assert moved == tmp_path / "01 - 9 to 5-video.mp4"
+        assert moved == tmp_path / "01 - 9 to 5.mp4"
 
     def test_a_video_already_at_the_destination_is_not_overwritten(self, tmp_path):
-        (tmp_path / "a-video.mp4").write_bytes(b"old")
-        (tmp_path / "b-video.mp4").write_bytes(b"chosen")
+        (tmp_path / "a.mp4").write_bytes(b"old")
+        (tmp_path / "b.mp4").write_bytes(b"chosen")
         moved = carry_companion(tmp_path / "a.opus", "A", tmp_path / "b.opus")
         assert moved is None
-        assert (tmp_path / "b-video.mp4").read_bytes() == b"chosen"
+        assert (tmp_path / "b.mp4").read_bytes() == b"chosen"
 
     def test_no_video_is_nothing_to_do(self, tmp_path):
         assert carry_companion(tmp_path / "a.opus", "A", tmp_path / "b.opus") is None
@@ -277,34 +282,39 @@ class TestRenamingEarlierOnes:
             (folder / name).write_bytes(b"x")
         return folder
 
-    def test_a_title_named_video_gets_its_tracks_name(self, tmp_path):
+    def test_a_suffix_named_video_gets_its_tracks_own_name(self, tmp_path):
+        folder = self.album(tmp_path, "01 - Intro.opus", "02 - 9 to 5.opus",
+                            "02 - 9 to 5-video.mp4")
+        assert rename_to_track_names(tmp_path) == 1
+        assert (folder / "02 - 9 to 5.mp4").is_file()
+        assert not (folder / "02 - 9 to 5-video.mp4").exists()
+
+    def test_a_title_named_video_too(self, tmp_path):
         folder = self.album(tmp_path, "01 - Intro.opus", "02 - 9 to 5.opus",
                             "9 to 5-video.mp4")
-        assert rename_title_named(tmp_path) == 1
-        assert (folder / "02 - 9 to 5-video.mp4").is_file()
-        assert not (folder / "9 to 5-video.mp4").exists()
+        assert rename_to_track_names(tmp_path) == 1
+        assert (folder / "02 - 9 to 5.mp4").is_file()
 
     def test_a_disc_numbered_track_too(self, tmp_path):
         folder = self.album(tmp_path, "2-03 - Jolene.flac", "Jolene-video.mp4")
-        assert rename_title_named(tmp_path) == 1
-        assert (folder / "2-03 - Jolene-video.mp4").is_file()
+        assert rename_to_track_names(tmp_path) == 1
+        assert (folder / "2-03 - Jolene.mp4").is_file()
 
-    def test_a_correctly_named_one_is_left_alone(self, tmp_path):
-        folder = self.album(tmp_path, "01 - Song.opus", "01 - Song-video.mp4",
-                            "Song.opus", "Song-video.mp4")
-        assert rename_title_named(tmp_path) == 0
-        assert sorted(p.name for p in folder.iterdir()) == [
-            "01 - Song-video.mp4", "01 - Song.opus", "Song-video.mp4", "Song.opus"]
+    def test_a_video_already_under_the_new_name_is_kept(self, tmp_path):
+        folder = self.album(tmp_path, "01 - Song.opus", "01 - Song.mp4",
+                            "01 - Song-video.mp4")
+        assert rename_to_track_names(tmp_path) == 0
+        assert (folder / "01 - Song-video.mp4").is_file()
 
     def test_two_tracks_with_that_title_is_not_guessed(self, tmp_path):
         folder = self.album(tmp_path, "01 - Song.opus", "2-01 - Song.opus",
                             "Song-video.mp4")
-        assert rename_title_named(tmp_path) == 0
+        assert rename_to_track_names(tmp_path) == 0
         assert (folder / "Song-video.mp4").is_file()
 
     def test_no_track_to_own_it_is_left_alone(self, tmp_path):
         folder = self.album(tmp_path, "01 - Other.opus", "Song-video.mp4")
-        assert rename_title_named(tmp_path) == 0
+        assert rename_to_track_names(tmp_path) == 0
         assert (folder / "Song-video.mp4").is_file()
 
 
@@ -354,13 +364,16 @@ class TestStatsCountsThem:
         music = tmp_path / "music"
         album = music / "Dolly Parton" / "9 to 5 (1980)"
         album.mkdir(parents=True)
-        (album / "9 to 5-video.mp4").write_bytes(b"x")
+        (album / "01 - 9 to 5.opus").write_bytes(b"x")
+        (album / "01 - 9 to 5.mp4").write_bytes(b"x")          # named like its track
+        (album / "Hush-a-Bye-video.mp4").write_bytes(b"x")     # not renamed yet
+        (album / "Making Of.mp4").write_bytes(b"x")            # no track by that name
         # The Kodi-style library sits inside the music root by default;
         # nothing in it is a companion, whatever it is called.
         kodi = music / "Music Videos" / "Dolly Parton"
         kodi.mkdir(parents=True)
         (kodi / "Dolly Parton - 9 to 5-video.mp4").write_bytes(b"x")
-        assert count_companion_videos(music, music / "Music Videos") == 1
+        assert count_companion_videos(music, music / "Music Videos") == 2
 
 
 class TestTheJobRunsIt:
@@ -392,7 +405,7 @@ class TestTheJobRunsIt:
             if isinstance(companion, Exception):
                 raise companion
             from beetdrop.companion import Companion
-            return companion or Companion(audio_path.parent / "9 to 5-video.mp4",
+            return companion or Companion(audio_path.parent / "01 - 9 to 5.mp4",
                                           "music video filed beside it")
 
         monkeypatch.setattr(jobs_module, "run_grab", fake_run_grab)
@@ -447,18 +460,18 @@ class TestRenamingOnStartup:
         folder = music / "Dolly Parton" / "9 to 5 and Odd Jobs (1980)"
         folder.mkdir(parents=True)
         (folder / "01 - 9 to 5.opus").write_bytes(b"x")
-        (folder / "9 to 5-video.mp4").write_bytes(b"clip")
+        (folder / "01 - 9 to 5-video.mp4").write_bytes(b"clip")
         config = Config(music_root=music, scratch_root=tmp_path / "s",
                         config_dir=tmp_path / "c")
         with TestClient(create_app(config)):
             for _ in range(100):
-                if Store(config.db_path).get_settings().get("companion_names_v2"):
+                if Store(config.db_path).get_settings().get("companion_names_v3"):
                     break
                 _time.sleep(0.02)
-        assert (folder / "01 - 9 to 5-video.mp4").read_bytes() == b"clip"
+        assert (folder / "01 - 9 to 5.mp4").read_bytes() == b"clip"
 
         walks = []
-        monkeypatch.setattr(companion_module, "rename_title_named",
+        monkeypatch.setattr(companion_module, "rename_to_track_names",
                             lambda root: walks.append(root) or 0)
         with TestClient(create_app(config)):
             _time.sleep(0.1)

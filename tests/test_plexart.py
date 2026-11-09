@@ -48,6 +48,9 @@ class FakePlex:
 
       GET  /library/sections/all                 libraries and their folders
       GET  /library/sections/{id}/all?type=8     the artists in one
+      GET  /library/sections/{id}/all?type=10    its tracks, each with the
+                                                 primaryExtraKey of a music
+                                                 video linked to it
       GET  /library/metadata/{id}/extras         an artist's extras
       POST /library/metadata/{id}/posters        upload an image, as the body
                                                  (python-plexapi's uploadPoster)
@@ -56,9 +59,12 @@ class FakePlex:
     and POST .../thumb answers 404, as a real server did.
     """
 
-    def __init__(self, artists, refuse_uploads=False, refuse_refresh=False):
+    def __init__(self, artists, refuse_uploads=False, refuse_refresh=False,
+                 tracks=()):
         # artists: {artist_key: [(extra_key, title, plex_file), ...]}
+        # tracks: [(track_key, title, audio_plex_file, extra_key or None)]
         self.artists = artists
+        self.tracks = list(tracks)
         self.uploads = []
         self.refreshes = []
         self.refuse_uploads = refuse_uploads
@@ -93,6 +99,13 @@ class FakePlex:
                          "Location": [{"path": "/srv/disk/Music/explo"}]},
                         {"key": "1", "title": "Movies", "type": "movie",
                          "Location": [{"path": "/srv/disk/Movies"}]}]}})
+                if url.path == "/library/sections/9/all" and query.get("type") == ["10"]:
+                    return self._reply(200, {"MediaContainer": {"Metadata": [
+                        dict({"ratingKey": key, "title": title, "type": "track",
+                              "Media": [{"Part": [{"file": audio}]}]},
+                             **({"primaryExtraKey": "/library/metadata/%s" % extra}
+                                if extra else {}))
+                        for key, title, audio, extra in fake.tracks]}})
                 if url.path == "/library/sections/9/all" and query.get("type") == ["8"]:
                     return self._reply(200, {"MediaContainer": {"Metadata": [
                         {"ratingKey": key, "type": "artist"} for key in fake.artists]}})
@@ -320,5 +333,29 @@ def test_without_a_folder_mapping_it_learns_one(tmp_path):
         result = send_artwork(config, on_detail=notes.append)
         assert result.sent == 2 and result.not_here == 0
         assert "Plex sees the music folder at /srv/disk/Music/explo" in notes
+    finally:
+        fake.close()
+
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+def test_videos_linked_to_tracks_are_found_through_the_tracks(tmp_path):
+    # Named like the song, beside it: Plex links it to the track, and it
+    # is not among the artist's extras at all.
+    music = tmp_path / "music"
+    album = music / "Ed Sheeran" / "x (2014)"
+    album.mkdir(parents=True)
+    (album / "01 - One.mp3").write_bytes(b"audio")
+    make_mp4(album / "01 - One.mp4")
+    embed_cover(album / "01 - One.mp4", JPEG, "image/jpeg")
+    (album / "02 - I'm a Mess.mp3").write_bytes(b"audio")
+    base = "/srv/disk/Music/explo/Ed Sheeran/x (2014)"
+    fake = FakePlex({"100": []}, tracks=[
+        ("900", "One", base + "/01 - One.mp3", "777"),
+        ("901", "I'm a Mess", base + "/02 - I'm a Mess.mp3", None)])
+    try:
+        result = send_artwork(Cfg(tmp_path, fake.url))
+        assert [(key, body) for key, body, _ in fake.uploads] == [("777", JPEG)]
+        assert (result.videos, result.sent) == (1, 1)
     finally:
         fake.close()

@@ -283,13 +283,16 @@ def count_videos(root: Path) -> int:
 
 
 def count_companion_videos(music_root: Path, video_root: Path) -> int:
-    """Music videos filed beside their tracks for Plex.
+    """Music videos filed beside their tracks for Plex: an .mp4 named
+    like a track in the same folder ("03 - Song.mp4" by "03 - Song.opus"),
+    or one an earlier version named "...-video.mp4".
 
     They live in album folders under the music root rather than in the
     video library, so counting the video library alone missed them. The
     video library is skipped here even when it sits inside the music
     root, which is the default, so nothing is counted twice.
     """
+    from .backfill import AUDIO_EXTS
     from .companion import PLEX_VIDEO_SUFFIX
 
     try:
@@ -297,12 +300,14 @@ def count_companion_videos(music_root: Path, video_root: Path) -> int:
     except OSError:
         skip = None
     total = 0
-    for path in music_root.rglob("*%s.mp4" % PLEX_VIDEO_SUFFIX):
+    for path in music_root.rglob("*.mp4"):
         if not path.is_file():
             continue
         if skip is not None and skip in path.resolve().parents:
             continue
-        total += 1
+        if path.stem.endswith(PLEX_VIDEO_SUFFIX) or any(
+                path.with_suffix(ext).is_file() for ext in AUDIO_EXTS):
+            total += 1
     return total
 
 
