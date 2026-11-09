@@ -218,6 +218,31 @@ class JobManager:
                 if result.added or result.upgraded or result.purged:
                     self._tell_plex(job_id, config, config.music_root)
                 return
+            if job["kind"] == "videoart":
+                # Embed the image already beside each music video into it.
+                # Reads and rewrites the library; downloads nothing.
+                from .videoart import backfill_video_art
+                self._update(job_id, stage="scanning",
+                             title="Embed music video artwork")
+                result = backfill_video_art(
+                    [config.music_root, config.video_root],
+                    on_progress=on_progress, on_detail=on_detail)
+                detail = "embedded artwork in %d of %d music videos" % (
+                    result.embedded, result.total)
+                extras = []
+                if result.already:
+                    extras.append("%d already had it" % result.already)
+                if result.no_image:
+                    extras.append("%d with no image beside them" % result.no_image)
+                if result.unusable:
+                    extras.append("%d whose image is not JPEG or PNG" % result.unusable)
+                if result.failed:
+                    extras.append("%d could not be read or written" % result.failed)
+                if extras:
+                    detail += " (" + ", ".join(extras) + ")"
+                self._update(job_id, stage="done", progress=100.0,
+                             detail=detail[:2000], log=collector.text()[:20000])
+                return
             if job["kind"] == "musicvideo":
                 # The video root is a subfolder we create on first use; make
                 # it before the writability check so a fresh install works.

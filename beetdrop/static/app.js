@@ -85,6 +85,7 @@ const app = createApp({
       testingApple: false,
       testingPlex: false,
       plexStatus: null,
+      embeddingArt: false,
       // A Plex PIN sign-in in progress. The account token never reaches
       // the page; it only learns the code, then the servers.
       plexPin: { id: "", code: "", state: "", servers: null, busy: false, error: "" },
@@ -395,6 +396,22 @@ const app = createApp({
         }
       } finally {
         this.loadingStats = false;
+      }
+    },
+
+    async embedVideoArt() {
+      this.embeddingArt = true;
+      try {
+        await this.api("/api/videos/embed-art", { method: "POST" });
+        this.showToast("Embedding artwork - progress is on the Queue");
+      } catch (err) {
+        if (err.message !== "password required") {
+          this.showToast(err.status === 409
+            ? "Artwork is already being embedded - see the Queue"
+            : "Could not start it: " + err.message);
+        }
+      } finally {
+        this.embeddingArt = false;
       }
     },
 

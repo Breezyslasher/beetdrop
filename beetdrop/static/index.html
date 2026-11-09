@@ -229,7 +229,7 @@
       <p v-if="j.stage === 'done' && j.inbox_state === 'unverified'" class="handoff-review">
         No MusicBrainz match - filed to _review
       </p>
-      <p v-else-if="j.stage === 'done' && j.kind !== 'lyricscan'" class="handoff">
+      <p v-else-if="j.stage === 'done' && j.kind !== 'lyricscan' && j.kind !== 'videoart'" class="handoff">
         Filed to library
       </p>
       <details v-if="j.stage === 'failed' && j.log" class="joblog">
@@ -617,6 +617,20 @@
         Showing the first {{ unverified.length }} of {{ unverifiedTotal }}.
       </p>
     </details>
+
+    <h3>Music video artwork</h3>
+    <p class="note">
+      Embeds the picture already beside a music video &mdash; a
+      <code>-thumb.jpg</code>, <code>-poster.jpg</code>, or one named like
+      the video &mdash; into the video itself, for players that read
+      embedded art. Videos that already have artwork are left alone, and
+      the image files stay where they are.
+    </p>
+    <div class="jobactions">
+      <button type="button" @click="embedVideoArt" :disabled="embeddingArt">
+        {{ embeddingArt ? 'Starting...' : 'Embed artwork into music videos' }}
+      </button>
+    </div>
 
     <h3>Lyrics</h3>
     <div class="jobactions">

@@ -1,0 +1,149 @@
+"""Embedding the artwork already beside music videos into the videos."""
+
+import subprocess
+import time
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from beetdrop.app import create_app
+from beetdrop.config import Config
+from beetdrop.videoart import backfill_video_art, has_cover, sidecar_image
+
+JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 64
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+WEBP = b"RIFF\x00\x00\x00\x00WEBPVP8 "
+
+
+def have_ffmpeg():
+    try:
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def make_mp4(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["ffmpeg", "-f", "lavfi", "-i", "color=c=black:s=16x16:d=1",
+         "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+         "-shortest", "-c:v", "mpeg4", "-c:a", "aac", str(path),
+         "-y", "-loglevel", "error"],
+        check=True, timeout=60)
+
+
+class TestFindingTheImage:
+    def album(self, tmp_path, *names):
+        folder = tmp_path / "Album"
+        folder.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            (folder / name).write_bytes(b"x")
+        return folder
+
+    def test_a_thumb_named_for_the_video(self, tmp_path):
+        # The user's case: a name another tool cut short, "-thumb.jpg" beside.
+        stem = "02 Go!!! _Fighting Dreamers_ (From _"
+        folder = self.album(tmp_path, stem + ".mp4", stem + "-thumb.jpg")
+        assert sidecar_image(folder / (stem + ".mp4")).name == stem + "-thumb.jpg"
+
+    def test_a_thumb_named_for_the_track_beside_a_plex_video(self, tmp_path):
+        folder = self.album(tmp_path, "02 Go!!!-video.mp4", "02 Go!!!-thumb.jpg")
+        assert sidecar_image(folder / "02 Go!!!-video.mp4").name == "02 Go!!!-thumb.jpg"
+
+    def test_the_videos_own_name_comes_first(self, tmp_path):
+        folder = self.album(tmp_path, "A-video.mp4", "A-video-thumb.jpg", "A-thumb.jpg")
+        assert sidecar_image(folder / "A-video.mp4").name == "A-video-thumb.jpg"
+
+    def test_poster_and_bare_names_and_png(self, tmp_path):
+        folder = self.album(tmp_path, "B.mp4", "B-poster.png", "C.mp4", "C.jpg")
+        assert sidecar_image(folder / "B.mp4").name == "B-poster.png"
+        assert sidecar_image(folder / "C.mp4").name == "C.jpg"
+
+    def test_an_uppercase_extension(self, tmp_path):
+        folder = self.album(tmp_path, "D.mp4", "D-thumb.JPG")
+        assert sidecar_image(folder / "D.mp4").name == "D-thumb.JPG"
+
+    def test_nothing_beside_it(self, tmp_path):
+        folder = self.album(tmp_path, "E.mp4", "cover.jpg")
+        assert sidecar_image(folder / "E.mp4") is None
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+class TestEmbedding:
+    def test_it_embeds_once_and_keeps_the_image(self, tmp_path):
+        from mutagen.mp4 import MP4
+
+        video = tmp_path / "music" / "Artist" / "Album" / "01 - Song-video.mp4"
+        make_mp4(video)
+        image = video.with_name("01 - Song-thumb.jpg")
+        image.write_bytes(JPEG)
+
+        first = backfill_video_art([tmp_path / "music"])
+        assert (first.total, first.embedded) == (1, 1)
+        assert bytes(MP4(str(video))["covr"][0]) == JPEG
+        assert image.read_bytes() == JPEG
+        # No temp copy left behind.
+        assert [p.name for p in video.parent.iterdir()] and not any(
+            p.name.startswith(".") for p in video.parent.iterdir())
+
+        again = backfill_video_art([tmp_path / "music"])
+        assert (again.embedded, again.already) == (0, 1)
+
+    def test_existing_artwork_is_never_replaced(self, tmp_path):
+        from beetdrop.videoart import embed_cover
+        from mutagen.mp4 import MP4
+
+        video = tmp_path / "v.mp4"
+        make_mp4(video)
+        embed_cover(video, PNG, "image/png")
+        (tmp_path / "v-thumb.jpg").write_bytes(JPEG)
+        result = backfill_video_art([tmp_path])
+        assert result.already == 1 and result.embedded == 0
+        assert bytes(MP4(str(video))["covr"][0]) == PNG
+
+    def test_what_cannot_be_used_is_counted_not_written(self, tmp_path):
+        make_mp4(tmp_path / "a.mp4")
+        (tmp_path / "a-thumb.jpg").write_bytes(WEBP)    # misnamed WebP
+        make_mp4(tmp_path / "b.mp4")                     # nothing beside it
+        (tmp_path / "c.mp4").write_bytes(b"not a video")
+        (tmp_path / "c-thumb.jpg").write_bytes(JPEG)
+        result = backfill_video_art([tmp_path])
+        assert (result.total, result.unusable, result.no_image, result.failed,
+                result.embedded) == (3, 1, 1, 1, 0)
+        assert not has_cover(tmp_path / "a.mp4")
+        assert (tmp_path / "c.mp4").read_bytes() == b"not a video"
+
+    def test_a_video_folder_inside_the_music_folder_is_done_once(self, tmp_path):
+        music = tmp_path / "music"
+        make_mp4(music / "Music Videos" / "x.mp4")
+        (music / "Music Videos" / "x-poster.jpg").write_bytes(JPEG)
+        result = backfill_video_art([music, music / "Music Videos"])
+        assert (result.total, result.embedded) == (1, 1)
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+class TestTheJob:
+    def test_it_runs_from_the_queue_and_says_what_it_did(self, tmp_path):
+        music = tmp_path / "music"
+        video = music / "Artist" / "Album" / "01 - Song-video.mp4"
+        make_mp4(video)
+        video.with_name("01 - Song-thumb.jpg").write_bytes(JPEG)
+        make_mp4(music / "Artist" / "Album" / "02 - Other-video.mp4")
+        config = Config(music_root=music, scratch_root=tmp_path / "s",
+                        config_dir=tmp_path / "c")
+        with TestClient(create_app(config)) as client:
+            job = client.post("/api/videos/embed-art").json()
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                done = next(j for j in client.get("/api/jobs").json()["jobs"]
+                            if j["id"] == job["id"])
+                if done["stage"] in ("done", "failed"):
+                    break
+                time.sleep(0.05)
+        assert done["stage"] == "done", done
+        assert done["kind"] == "videoart"
+        assert "embedded artwork in 1 of 2" in done["detail"]
+        assert "1 with no image beside them" in done["detail"]
+        assert has_cover(video)

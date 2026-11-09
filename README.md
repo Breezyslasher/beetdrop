@@ -173,6 +173,17 @@ default - for players that read embedded art (Kodi, Infuse, VLC, file
 browsers). Plex has no way to set artwork on a music video extra and
 draws its own thumbnail from a frame, so it may not show this one.
 
+Music videos filed before that - by Beetdrop or another tool - often
+have the picture as a separate image beside them instead. **Repair ->
+Embed artwork into music videos** copies it in: for each MP4 with no
+embedded art, it looks for `<video>-thumb`, `<video>-poster` or
+`<video>` as `.jpg`/`.png`, then the same names without a Plex suffix
+such as `-video`. Videos that already have artwork are left alone, the
+images stay where they are, and each video is rewritten on a copy that
+replaces it in one step, so a pass that is stopped part-way leaves no
+half-written file. It runs on the Queue and says how many it embedded,
+how many had no image, and how many had an image MP4 cannot hold.
+
 Finding the right video is strict on identity and loose on length. A
 wrong video beside a track is worse than none, because Plex presents it
 as that song, so anything that is not the same recording by the same
@@ -341,7 +352,7 @@ POST /api/lyrics/musixmatch-token POST /api/lyrics/scan
 POST /api/lyrics/tag-sources      GET  /api/library  GET /api/stats
 POST /api/plex/test               POST /api/plex/sign-out
 POST /api/plex/pin                GET  /api/plex/pin/{id}
-POST /api/plex/pin/{id}/server
+POST /api/plex/pin/{id}/server     POST /api/videos/embed-art
 ```
 
 ## Running it
