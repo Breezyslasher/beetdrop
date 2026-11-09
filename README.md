@@ -223,6 +223,16 @@ it out. Artwork found this way is marked in the file's tags. One search
 a second; after five failed searches in a row it stops, since YouTube is
 refusing, and says so.
 
+Plex does not read a music video's embedded artwork - it makes its own
+thumbnail from a frame. With Plex set up, **Send artwork to Plex** (on
+the same page) uploads each music video's embedded artwork to Plex as
+that video's thumbnail: it walks the artists of the music library, asks
+Plex for each one's extras, maps each extra's file back to the file
+here, and posts the image (`POST /library/metadata/{id}/thumb`, owner
+only). Plex keeps every image uploaded to an item, so a picture already
+sent is remembered and not sent again; a changed one is. If Plex refuses
+five uploads in a row it stops and says so.
+
 Finding the right video is strict on identity and loose on length. A
 wrong video beside a track is worse than none, because Plex presents it
 as that song, so anything that is not the same recording by the same
@@ -392,6 +402,7 @@ POST /api/lyrics/tag-sources      GET  /api/library  GET /api/stats
 POST /api/plex/test               POST /api/plex/sign-out
 POST /api/plex/pin                GET  /api/plex/pin/{id}
 POST /api/plex/pin/{id}/server     POST /api/videos/embed-art
+POST /api/plex/send-artwork
 ```
 
 ## Running it

@@ -86,6 +86,8 @@ const app = createApp({
       testingPlex: false,
       plexStatus: null,
       embeddingArt: false,
+      sendingPlexArt: false,
+      plexLinked: false,
       // A Plex PIN sign-in in progress. The account token never reaches
       // the page; it only learns the code, then the servers.
       plexPin: { id: "", code: "", state: "", servers: null, busy: false, error: "" },
@@ -262,6 +264,7 @@ const app = createApp({
       if (view === "library" && !this.libraryItems.length) this.loadLibrary();
       if (view === "stats" && !this.stats) this.loadStats();
       if (view === "repair" && !this.unverified.length) this.loadUnverified();
+      if (view === "repair") this.checkPlexLinked();
       // The work area is one scroller shared by every screen; without
       // this, opening Settings from halfway down Library starts halfway
       // down Settings.
@@ -396,6 +399,33 @@ const app = createApp({
         }
       } finally {
         this.loadingStats = false;
+      }
+    },
+
+    async checkPlexLinked() {
+      // Only whether Plex is set up, for the Repair page's Plex button;
+      // the full settings load belongs to the Settings page.
+      try {
+        const s = await this.api("/api/settings");
+        this.plexLinked = !!(s.plex_url && s.plex_token_set);
+      } catch (err) {
+        this.plexLinked = false;
+      }
+    },
+
+    async sendArtToPlex() {
+      this.sendingPlexArt = true;
+      try {
+        await this.api("/api/plex/send-artwork", { method: "POST" });
+        this.showToast("Sending artwork to Plex - progress is on the Queue");
+      } catch (err) {
+        if (err.message !== "password required") {
+          this.showToast(err.status === 409
+            ? "Artwork is already being sent - see the Queue"
+            : "Could not start it: " + err.message);
+        }
+      } finally {
+        this.sendingPlexArt = false;
       }
     },
 
