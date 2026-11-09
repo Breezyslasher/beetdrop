@@ -68,6 +68,22 @@ def local_path(plex_file: str, base: str, music_root: Path) -> Optional[Path]:
     return music_root / relative if relative else None
 
 
+def by_tail(plex_file: str, music_root: Path) -> Optional[tuple]:
+    """(the file here, the folder Plex sees as the music folder) found by
+    the end of Plex's path alone: the longest tail of it that exists
+    under the music folder here. A folder and a file name at least -
+    a file name alone could be anyone's "Intro.mp4"."""
+    parts = [p for p in plex_file.split("/") if p]
+    for start in range(len(parts) - 1):
+        tail = parts[start:]
+        if len(tail) < 2:
+            break
+        here = music_root.joinpath(*tail)
+        if here.is_file():
+            return here, "/" + "/".join(parts[:start])
+    return None
+
+
 def embedded_art(video: Path) -> Optional[tuple]:
     """(bytes, MIME type) of the cover art embedded in an MP4, or None."""
     from mutagen.mp4 import MP4, MP4Cover
@@ -108,14 +124,20 @@ def send_artwork(config, on_progress: Callable[[float], None] = _noop,
     url, token = config.plex_url, config.plex_token
     all_sections = plex.sections(url, token, fresh=True)
     base, _how = plex.mapping(config, all_sections)
-    if not base:
-        raise PlexError("Beetdrop cannot tell where Plex sees the music folder - "
-                        "set it in Settings")
     chosen = plex.chosen_section(config, all_sections)
-    libraries = [chosen] if chosen else [
-        s for s in plex.sections_for(all_sections, base) if s["type"] == "artist"]
+    if chosen:
+        libraries = [chosen]
+    elif base:
+        libraries = [s for s in plex.sections_for(all_sections, base)
+                     if s["type"] == "artist"]
+    else:
+        # Where Plex sees the music folder is not known; every music
+        # library is walked and files are found by the ends of their
+        # paths (by_tail), which also teaches the mapping.
+        libraries = [s for s in all_sections if s["type"] == "artist"]
     if not libraries:
-        raise PlexError("none of Plex's music libraries holds %s" % base)
+        raise PlexError("Plex has no music library%s" % (
+            " holding %s" % base if base else ""))
 
     state_path = config.config_dir / STATE_FILE
     state = _load_state(state_path)
@@ -145,10 +167,16 @@ def send_artwork(config, on_progress: Callable[[float], None] = _noop,
                     continue
                 seen.add(key)
                 result.videos += 1
-                here = local_path(files[0], base, config.music_root)
+                here = local_path(files[0], base, config.music_root) if base else None
                 if here is None or not here.is_file():
-                    result.not_here += 1
-                    continue
+                    found = by_tail(files[0], config.music_root)
+                    if found is None:
+                        result.not_here += 1
+                        continue
+                    here = found[0]
+                    if not base:
+                        base = found[1]
+                        on_detail("Plex sees the music folder at %s" % base)
                 try:
                     art = embedded_art(here)
                 except Exception:
