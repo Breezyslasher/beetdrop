@@ -953,3 +953,10 @@ textarea { padding: 10px 12px; resize: vertical; font-size: 13px; }
 /* A Plex folder to pick: long NAS paths wrap rather than push the page
    sideways on a phone. */
 .candidate code { overflow-wrap: anywhere; }
+
+/* A YouTube result to choose a music video's artwork from: the picture
+   is what is being chosen, so it leads, at the 16:9 it will be shown. */
+.candidate.artpick { display: flex; gap: 10px; align-items: center; text-align: left; }
+.candidate.artpick img { width: 128px; aspect-ratio: 16 / 9; object-fit: cover;
+  border-radius: 6px; flex: none; background: var(--panel); }
+.candidate.artpick > span { min-width: 0; overflow-wrap: anywhere; }

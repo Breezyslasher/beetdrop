@@ -223,6 +223,13 @@ it out. Artwork found this way is marked in the file's tags. One search
 a second; after five failed searches in a row it stops, since YouTube is
 refusing, and says so.
 
+For the ones no rule could settle, **Find videos with no artwork** (same
+page) lists every music video still without, each with a search box
+filled in with the artist and title the automatic search would use.
+Search YouTube, see each result's thumbnail, channel and length - and
+how far that is from the file's own - and pick one: its full-size
+thumbnail is embedded, marked as chosen by hand.
+
 Plex does not read a music video's embedded artwork - it makes its own
 thumbnail from a frame. With Plex set up, **Send artwork to Plex** (on
 the same page) uploads each music video's embedded artwork to Plex as
@@ -408,6 +415,7 @@ POST /api/plex/test               POST /api/plex/sign-out
 POST /api/plex/pin                GET  /api/plex/pin/{id}
 POST /api/plex/pin/{id}/server     POST /api/videos/embed-art
 POST /api/plex/send-artwork
+GET  /api/videos/missing-art      GET /api/videos/art-candidates   POST /api/videos/art
 ```
 
 ## Running it

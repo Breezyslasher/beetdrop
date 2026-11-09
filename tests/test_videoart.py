@@ -738,3 +738,67 @@ def test_the_search_uses_the_title_from_tags(tmp_path):
     backfill_video_art([tmp_path / "music"], search=lambda q: asked.append(q) or [],
                        sleep=lambda s: None)
     assert asked == ["Eminem - From The D 2 The LBC"]
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+class TestChoosingByHand:
+    def library(self, tmp_path):
+        music = tmp_path / "music"
+        bare = music / "Kana-Boon" / "fish.mp4"
+        make_mp4(bare)
+        done = music / "Weezer" / "Buddy Holly.mp4"
+        make_mp4(done)
+        from beetdrop.videoart import embed_cover
+        embed_cover(done, JPEG, "image/jpeg")
+        webm = music / "Old" / "x.mp4"
+        webm.parent.mkdir(parents=True)
+        webm.write_bytes(b"\x1a\x45\xdf\xa3" + b"\x00" * 64)
+        return music, bare
+
+    def test_only_videos_with_no_artwork_are_listed(self, tmp_path):
+        from beetdrop.videoart import list_missing_art
+        music, bare = self.library(tmp_path)
+        videos, total = list_missing_art([music])
+        assert total == 1 and [v["name"] for v in videos] == ["fish.mp4"]
+        assert videos[0]["folder"] == "Kana-Boon"
+        assert videos[0]["query"] == "Kana-Boon - fish"
+        assert videos[0]["duration"] == 1
+
+    def test_through_the_api(self, tmp_path, monkeypatch):
+        import beetdrop.search as search_module
+        import beetdrop.videoart as videoart
+        from mutagen.mp4 import MP4
+
+        music, bare = self.library(tmp_path)
+        monkeypatch.setattr(search_module, "search_videos",
+                            lambda q, limit=10: [yt("fish", 1, ("Kana-Boon",), "fffffffffff")])
+        monkeypatch.setattr(videoart, "fetch_thumbnail",
+                            lambda vid, url="": (JPEG, "image/jpeg"))
+        config = Config(music_root=music, scratch_root=tmp_path / "s",
+                        config_dir=tmp_path / "c")
+        with TestClient(create_app(config)) as client:
+            listed = client.get("/api/videos/missing-art").json()
+            assert listed["total"] == 1
+            found = client.get("/api/videos/art-candidates?q=Kana-Boon fish").json()
+            assert found["candidates"][0]["video_id"] == "fffffffffff"
+            assert found["candidates"][0]["thumbnail"].endswith("/fffffffffff/mqdefault.jpg")
+            done = client.post("/api/videos/art", json={
+                "path": listed["videos"][0]["path"], "video_id": "fffffffffff"})
+            assert done.status_code == 200, done.text
+            assert client.get("/api/videos/missing-art").json()["total"] == 0
+        assert bytes(MP4(str(bare))["covr"][0]) == JPEG
+
+    def test_a_path_outside_the_library_is_refused(self, tmp_path):
+        music, _bare = self.library(tmp_path)
+        outside = tmp_path / "elsewhere.mp4"
+        make_mp4(outside)
+        config = Config(music_root=music, scratch_root=tmp_path / "s",
+                        config_dir=tmp_path / "c")
+        with TestClient(create_app(config)) as client:
+            for path in (str(outside), "/etc/passwd"):
+                response = client.post("/api/videos/art", json={
+                    "path": path, "video_id": "fffffffffff"})
+                assert response.status_code == 400, path
+            bad_id = client.post("/api/videos/art", json={
+                "path": str(music / "Kana-Boon" / "fish.mp4"), "video_id": "../../x"})
+            assert bad_id.status_code == 400
