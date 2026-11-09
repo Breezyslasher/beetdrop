@@ -186,10 +186,9 @@ It is always best effort. The audio is what was asked for, so a video
 that cannot be found or fetched never fails the grab; the job card says
 what happened to it. Tracks only - an album would mean a search per
 track, and most album tracks have no video. A grab that went to
-`_review/` gets none, because its title is YouTube's guess and will
-change when the match is fixed; fixing a match carries an existing video
-along and renames it for the new filename. Stats counts these apart from the
-Kodi-style library.
+`_review/` gets its video too; fixing the match later carries the video
+along and renames it for the new filename. Stats counts these apart from
+the Kodi-style library.
 
 The `-video` naming follows Plex's documented convention for music
 extras rather than a test against a live server, so it is worth one grab

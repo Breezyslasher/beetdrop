@@ -340,14 +340,9 @@ class JobManager:
         that was asked for has already succeeded. Returns one line for the
         job card saying what became of the video.
         """
-        if not outcome.verified:
-            # Its title is YouTube's guess, and it will change when the
-            # match is fixed - a video named for it now would be named
-            # for nothing in Plex by then.
-            text = ("no music video: the track went to _review, so its "
-                    "title is not settled yet")
-            collector.add(text)
-            return text
+        # A track sent to _review gets its video too: the video is named
+        # for the audio file, not the title, and fixing the match later
+        # carries it along (rematch.apply_choice -> carry_companion).
         on_stage("video")
         self._update(job_id, progress=0.0)
         found = grab_companion(config, outcome.inbox_path, outcome.tags,
