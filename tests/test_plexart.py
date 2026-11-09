@@ -60,11 +60,12 @@ class FakePlex:
     """
 
     def __init__(self, artists, refuse_uploads=False, refuse_refresh=False,
-                 tracks=()):
+                 tracks=(), items=()):
         # artists: {artist_key: [(extra_key, title, plex_file), ...]}
         # tracks: [(track_key, title, audio_plex_file, extra_key or None)]
         self.artists = artists
         self.tracks = list(tracks)
+        self.items = dict(items)      # {extra_key: plex_file} for GET /library/metadata/{id}
         self.uploads = []
         self.refreshes = []
         self.refuse_uploads = refuse_uploads
@@ -110,6 +111,11 @@ class FakePlex:
                     return self._reply(200, {"MediaContainer": {"Metadata": [
                         {"ratingKey": key, "type": "artist"} for key in fake.artists]}})
                 parts = url.path.split("/")
+                if (url.path.startswith("/library/metadata/") and len(parts) == 4
+                        and parts[3] in fake.items):
+                    return self._reply(200, {"MediaContainer": {"Metadata": [
+                        {"ratingKey": parts[3], "type": "clip",
+                         "Media": [{"Part": [{"file": fake.items[parts[3]]}]}]}]}})
                 if url.path.startswith("/library/metadata/") and parts[-1] == "extras":
                     extras = fake.artists.get(parts[3], [])
                     return self._reply(200, {"MediaContainer": {"Metadata": [
@@ -212,7 +218,9 @@ class TestSending:
             assert sorted((key, body, kind) for key, body, kind in fake.uploads) == [
                 ("500", JPEG, "image/jpeg"), ("501", PNG, "image/png")]
             assert (result.artists, result.videos, result.sent, result.no_art,
-                    result.not_here) == (3, 4, 2, 1, 1)
+                    result.not_here, result.not_mp4) == (3, 5, 2, 1, 1, 1)
+            # The one not found is named the way Plex names it.
+            assert result.missing == ["/srv/disk/Music/explo/Ed Sheeran/Gone.mp4"]
 
             # A second run sends nothing: Plex keeps every image uploaded.
             fake.uploads.clear()
@@ -357,5 +365,33 @@ def test_videos_linked_to_tracks_are_found_through_the_tracks(tmp_path):
         result = send_artwork(Cfg(tmp_path, fake.url))
         assert [(key, body) for key, body, _ in fake.uploads] == [("777", JPEG)]
         assert (result.videos, result.sent) == (1, 1)
+    finally:
+        fake.close()
+
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+def test_a_linked_video_named_unlike_its_song_is_asked_of_plex(tmp_path):
+    # Plex linked "One (Official Video).mp4" to "01 - One.mp3": not the
+    # song's name, so the file is looked up rather than guessed.
+    music = tmp_path / "music"
+    album = music / "Nick" / "Ed Sheeran" / "x (2014)"
+    album.mkdir(parents=True)
+    (album / "01 - One.mp3").write_bytes(b"audio")
+    make_mp4(album / "One (Official Video).mp4")
+    embed_cover(album / "One (Official Video).mp4", JPEG, "image/jpeg")
+    (album / "02 - Photograph.mp3").write_bytes(b"audio")
+    base = "/srv/disk/Music/Nick/Ed Sheeran/x (2014)"
+    fake = FakePlex({"100": []}, tracks=[
+        ("900", "One", base + "/01 - One.mp3", "777"),
+        ("901", "Photograph", base + "/02 - Photograph.mp3", "778")],
+        items={"777": base + "/One (Official Video).mp4",
+               "778": base + "/Photograph.mkv"})
+    try:
+        config = Cfg(tmp_path, fake.url)
+        config.plex_music_path = "/srv/disk/Music"       # one folder up
+        result = send_artwork(config)
+        assert [key for key, _, _ in fake.uploads] == ["777"]
+        assert (result.sent, result.not_mp4, result.not_here) == (1, 1, 0)
     finally:
         fake.close()

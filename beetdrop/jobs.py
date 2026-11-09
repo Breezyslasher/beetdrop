@@ -246,7 +246,11 @@ class JobManager:
                 if result.no_art:
                     extras.append("%d with no artwork in the file" % result.no_art)
                 if result.not_here:
-                    extras.append("%d not in the music folder here" % result.not_here)
+                    extras.append("%d not found in the music folder here - the "
+                                  "log lists some" % result.not_here)
+                if result.not_mp4:
+                    extras.append("%d not MP4, which cannot hold this artwork"
+                                  % result.not_mp4)
                 if result.refreshed:
                     top, _n = result.reasons.most_common(1)[0]
                     extras.append("%d where Plex refused the picture (%s) and was "
@@ -259,7 +263,12 @@ class JobManager:
                 if result.stopped:
                     detail += "; stopped: " + result.stopped
                 self._update(job_id, stage="done", progress=100.0,
-                             detail=detail[:2000], log=collector.text()[:20000])
+                             detail=detail[:2000], log=(
+                                 ("Not found in the music folder here, as Plex "
+                                  "names them:\n" + "\n".join(
+                                      "  " + m for m in result.missing) + "\n\n"
+                                  if result.missing else "")
+                                 + collector.text())[:20000])
                 return
             if job["kind"] == "videoart":
                 # Embed the image beside each music video into it - or its
