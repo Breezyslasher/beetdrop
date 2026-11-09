@@ -40,7 +40,8 @@ SETTING_KEYS = ("output_format", "bitrate", "password", "concurrency",
                 "music_root", "lyrics", "mxm_token", "lyrics_provider",
                 "video_root", "video_max_height",
                 "apple_token", "apple_storefront", "word_lyrics",
-                "plex_url", "plex_token", "plex_music_path", "plex_client_id")
+                "plex_url", "plex_token", "plex_music_path", "plex_client_id",
+                "plex_section")
 
 
 class Store:

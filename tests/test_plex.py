@@ -102,8 +102,11 @@ class FakePlex:
 
 
 @pytest.fixture(autouse=True)
-def fresh_cache():
+def fresh_cache(monkeypatch, tmp_path_factory):
     plex._cache.clear()
+    # This machine's own mounts must not suggest anything; tests that
+    # want a mount write their own.
+    monkeypatch.setattr(plex, "MOUNTINFO", tmp_path_factory.mktemp("proc") / "none")
     yield
     plex._cache.clear()
 
@@ -322,26 +325,23 @@ class TestSettings:
                 "plex_music_path": "/data/music"})
             result = client.post("/api/plex/test").json()
         assert result["ok"] is True and result["section"] == "Music"
-        # It lists Plex's own folders, which is how a person finds the
-        # right value for the mapping.
-        assert {"title": "Movies", "type": "movie",
+        # Every library is listed with its key, to pick from.
+        assert {"key": "7", "title": "Movies", "type": "movie",
                 "locations": ["/data/movies"]} in result["libraries"]
 
-    def test_the_test_button_explains_a_wrong_mapping(self, tmp_path, server):
+    def test_with_nothing_holding_the_folder_it_asks_for_a_library(self, tmp_path, server):
         config = self.make(tmp_path)
         with TestClient(create_app(config)) as client:
             client.put("/api/settings", json={
                 "plex_url": server.url, "plex_token": TOKEN,
                 "plex_music_path": "/not/there"})
             result = client.post("/api/plex/test").json()
-        assert result["ok"] is False and "none of its libraries" in result["detail"]
-        # The music library's folder is offered to pick; the movies' is not.
-        assert result["choices"] == ["/data/music"]
+        assert result["ok"] is False and "Pick the library to scan" in result["detail"]
 
-    def test_the_test_button_suggests_the_mounted_folder(self, tmp_path, monkeypatch):
+    def test_the_mounted_folder_is_used_without_typing_it(self, tmp_path, monkeypatch):
         nas = FakePlex([(s["key"], s["title"], s["type"], s["locations"]) for s in NAS])
-        info = tmp_path / "mountinfo"
         config = self.make(tmp_path)
+        info = tmp_path / "mountinfo"
         info.write_text(mountinfo("/Media/Music/Nick", point=str(config.music_root)))
         monkeypatch.setattr(plex, "MOUNTINFO", info)
         try:
@@ -350,13 +350,99 @@ class TestSettings:
                 result = client.post("/api/plex/test").json()
         finally:
             nas.close()
-        assert result["ok"] is False
-        assert result["suggestion"] == DISK + "/Media/Music/Nick"
-        assert result["choices"][0] == result["suggestion"]
-        assert result["suggestion"] in result["detail"]
-        # Every music folder is offered once, Both included only once.
-        assert result["choices"].count(DISK + "/Media/Music/Both") == 1
-        assert DISK + "/Media/VIDEO/movies" not in result["choices"]
+        assert result["ok"] is True and result["sections"] == ["Nick's Music"]
+        assert result["mapped"] == DISK + "/Media/Music/Nick"
+        assert result["mapped_how"] == "mount"
+        assert result["mapped"] in result["detail"]
+
+    def test_a_chosen_library_with_no_known_folder_is_scanned_whole(self, tmp_path, server):
+        config = self.make(tmp_path)
+        with TestClient(create_app(config)) as client:
+            client.put("/api/settings", json={
+                "plex_url": server.url, "plex_token": TOKEN, "plex_section": "3"})
+            result = client.post("/api/plex/test").json()
+            assert client.get("/api/settings").json()["plex_section"] == "3"
+        assert result["ok"] is True and result["sections"] == ["Music"]
+        assert "rescans all of" in result["detail"]
+
+    def test_a_chosen_library_that_is_gone_says_so(self, tmp_path, server):
+        config = self.make(tmp_path)
+        with TestClient(create_app(config)) as client:
+            client.put("/api/settings", json={
+                "plex_url": server.url, "plex_token": TOKEN, "plex_section": "99"})
+            result = client.post("/api/plex/test").json()
+        assert result["ok"] is False and "is gone" in result["detail"]
+
+    def test_signing_out_forgets_the_library(self, tmp_path, server):
+        # A library key means something on one server only.
+        config = self.make(tmp_path)
+        with TestClient(create_app(config)) as client:
+            client.put("/api/settings", json={
+                "plex_url": server.url, "plex_token": TOKEN, "plex_section": "3"})
+            client.post("/api/plex/sign-out")
+            assert client.get("/api/settings").json()["plex_section"] == ""
+
+
+class TestChoosingTheLibrary:
+    def nas(self):
+        return FakePlex([(s["key"], s["title"], s["type"], s["locations"]) for s in NAS])
+
+    def test_only_the_chosen_library_is_scanned(self, tmp_path):
+        fake = self.nas()
+        try:
+            config = Cfg(tmp_path, fake.url, TOKEN, DISK + "/Media/Music/Both")
+            config.plex_section = "9"
+            plex.scan_folder(config, config.music_root / "Artist")
+            assert fake.refreshes == [("9", DISK + "/Media/Music/Both/Artist")]
+        finally:
+            fake.close()
+
+    def test_without_a_known_folder_the_whole_library_is_scanned(self, tmp_path):
+        fake = self.nas()
+        try:
+            config = Cfg(tmp_path, fake.url, TOKEN, "")
+            config.plex_section = "9"
+            line = plex.scan_folder(config, config.music_root / "Artist")
+            # No path: Plex rescans the library, skipping what it has.
+            assert fake.refreshes == [("9", "")]
+            assert "rescanning all of \"Nick's Music\"" in line
+        finally:
+            fake.close()
+
+    def test_a_folder_outside_the_chosen_library_rescans_it_whole(self, tmp_path):
+        # A wrong path would scan nothing; the whole library is never wrong.
+        fake = self.nas()
+        try:
+            config = Cfg(tmp_path, fake.url, TOKEN, DISK + "/Media/Music/ALL")
+            config.plex_section = "9"
+            plex.scan_folder(config, config.music_root)
+            assert fake.refreshes == [("9", "")]
+        finally:
+            fake.close()
+
+    def test_on_automatic_the_mounted_folder_is_used(self, tmp_path, monkeypatch):
+        fake = self.nas()
+        config = Cfg(tmp_path, fake.url, TOKEN, "")
+        info = tmp_path / "mountinfo"
+        info.write_text(mountinfo("/Media/Music/explo", point=str(config.music_root)))
+        monkeypatch.setattr(plex, "MOUNTINFO", info)
+        try:
+            plex.scan_folder(config, config.music_root / "Artist" / "Album")
+            assert fake.refreshes == [("9", DISK + "/Media/Music/explo/Artist/Album")]
+        finally:
+            fake.close()
+
+    def test_a_typed_folder_beats_the_mounted_one(self, tmp_path, monkeypatch):
+        fake = self.nas()
+        config = Cfg(tmp_path, fake.url, TOKEN, DISK + "/Media/Music/Nick")
+        info = tmp_path / "mountinfo"
+        info.write_text(mountinfo("/Media/Music/explo", point=str(config.music_root)))
+        monkeypatch.setattr(plex, "MOUNTINFO", info)
+        try:
+            plex.scan_folder(config, config.music_root)
+            assert fake.refreshes == [("9", DISK + "/Media/Music/Nick")]
+        finally:
+            fake.close()
 
 
 class TestAfterAGrab:

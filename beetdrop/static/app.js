@@ -119,6 +119,19 @@ const app = createApp({
   },
 
   computed: {
+    plexLibraryChoices() {
+      // Music libraries first; the rest stay pickable for a library of
+      // another type that happens to hold the music folder.
+      const libs = (this.plexStatus && this.plexStatus.libraries) || [];
+      return libs.filter(l => l.type === "artist").concat(libs.filter(l => l.type !== "artist"));
+    },
+    plexFolderPlaceholder() {
+      const status = this.plexStatus;
+      if (status && status.mapped_how === "mount") return status.mapped + " (found automatically)";
+      if (status && status.mapped_how === "same") return status.mapped + " (same as here)";
+      if (status && status.libraries) return "unknown - the whole library is scanned";
+      return this.settings ? this.settings.music_root + " (same as here)" : "";
+    },
     icons() {
       // The template draws icons by name; the paths themselves are a
       // constant and never change, so they are not reactive state.
@@ -687,8 +700,12 @@ const app = createApp({
           plex_url: this.settings.plex_url || "",
           plex_token: "",
           plex_music_path: this.settings.plex_music_path || "",
+          plex_section: this.settings.plex_section || "",
         };
         this.plexStatus = null;
+        // The library list comes from Plex itself, so ask it now rather
+        // than leave the picker empty until someone presses Test.
+        if (this.settings.plex_url && this.settings.plex_token_set) this.checkPlex();
         await this.refreshHealth();
       } catch (err) {
         if (err.message !== "password required") this.showToast("Cannot load settings: " + err.message);
@@ -707,6 +724,7 @@ const app = createApp({
         video_max_height: Number(this.draft.video_max_height),
         plex_url: (this.draft.plex_url || "").trim(),
         plex_music_path: (this.draft.plex_music_path || "").trim(),
+        plex_section: this.draft.plex_section || "",
       };
       // Only send the library paths when they are editable (not env-locked).
       if (this.settings && !this.settings.music_root_locked) {
@@ -805,6 +823,7 @@ const app = createApp({
         this.plexStatus = result;
         this.settings = await this.api("/api/settings");
         this.draft.plex_url = this.settings.plex_url || "";
+        this.draft.plex_section = "";
         this.plexPin = { id: "", code: "", state: "", servers: null, busy: false, error: "" };
         this.showToast("Signed in to Plex: " + (result.server || server.name));
       } catch (err) {
@@ -830,10 +849,21 @@ const app = createApp({
         await this.api("/api/plex/sign-out", { method: "POST" });
         this.settings = await this.api("/api/settings");
         this.draft.plex_url = "";
+        this.draft.plex_section = "";
         this.plexStatus = null;
         this.showToast("Signed out of Plex");
       } catch (err) {
         if (err.message !== "password required") this.showToast(err.message);
+      }
+    },
+
+    async checkPlex() {
+      try {
+        this.plexStatus = await this.api("/api/plex/test", { method: "POST" });
+      } catch (err) {
+        if (err.message !== "password required") {
+          this.plexStatus = { ok: false, detail: err.message };
+        }
       }
     },
 
@@ -856,13 +886,6 @@ const app = createApp({
       } finally {
         this.testingPlex = false;
       }
-    },
-
-    usePlexFolder(path) {
-      // Fill the mapping in and test it straight away, so the answer is
-      // the same "Connected" line a typed value would get.
-      this.draft.plex_music_path = path;
-      return this.testPlex();
     },
 
     saveGrabWithVideo() {

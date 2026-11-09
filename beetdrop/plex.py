@@ -141,6 +141,46 @@ def _titles(found: list) -> str:
     return " and ".join('"%s"' % s["title"] for s in found)
 
 
+def mapping(config, all_sections: list) -> tuple:
+    """Where Plex sees the music folder, and how that was found.
+
+    "set" - typed in Settings. "same" - Plex sees it at the same path.
+    "mount" - worked out from which folder of the host's disk is mounted
+    as the music folder (see suggest_mapping). ("", "") when none of
+    those can tell, which still leaves a chosen library scannable whole.
+    """
+    if config.plex_music_path:
+        return config.plex_music_path.rstrip("/") or "/", "set"
+    same = config.music_root.as_posix()
+    if sections_for(all_sections, same):
+        return same, "same"
+    guess = suggest_mapping(all_sections, source_parts(config.music_root))
+    return (guess, "mount") if guess else ("", "")
+
+
+def chosen_section(config, all_sections: list) -> Optional[dict]:
+    key = getattr(config, "plex_section", "")
+    return next((s for s in all_sections if s["key"] == key), None) if key else None
+
+
+def plan(config, all_sections: list, folder: Path) -> tuple:
+    """(libraries to scan, the Plex path to restrict the scan to or "").
+
+    With a library chosen in Settings, that library alone: just the
+    folder when Beetdrop knows where Plex sees it inside that library,
+    the whole library when it does not - Plex skips files it already
+    has, so that is slower, never wrong. Left on automatic, every library
+    holding the folder.
+    """
+    base, _how = mapping(config, all_sections)
+    target = plex_path(folder, config.music_root, base)
+    chosen = chosen_section(config, all_sections)
+    if chosen is not None:
+        inside = any(_contains(loc, target) for loc in chosen["locations"])
+        return [chosen], target if inside else ""
+    return sections_for(all_sections, target), target
+
+
 def scan_folder(config, folder: Path) -> str:
     """Ask Plex to scan `folder`, and say what happened in one line.
 
@@ -149,23 +189,27 @@ def scan_folder(config, folder: Path) -> str:
     """
     if not (config.plex_url and config.plex_token):
         return ""
-    target = plex_path(folder, config.music_root, config.plex_music_path)
     try:
-        found = sections_for(sections(config.plex_url, config.plex_token), target)
+        found, target = plan(config, sections(config.plex_url, config.plex_token), folder)
         if not found:
             # Perhaps a library was added since the list was cached.
-            found = sections_for(
-                sections(config.plex_url, config.plex_token, fresh=True), target)
+            found, target = plan(
+                config, sections(config.plex_url, config.plex_token, fresh=True), folder)
         if not found:
-            return ("Plex has no library containing %s - check where Plex sees "
-                    "the music folder in Settings" % target)
+            if getattr(config, "plex_section", ""):
+                return ("Plex no longer has the library chosen in Settings - "
+                        "pick it again")
+            return ("Plex has no library containing %s - pick the library to "
+                    "scan in Settings" % (target or folder))
         # POST, as the API documents it: a refresh changes server state.
-        # `path` restricts it to that folder, so the library is never
-        # rescanned whole for one grab.
+        # `path` restricts it to that folder, so the library is not
+        # rescanned whole for one grab when the folder is known.
         for section in found:
             _call("POST", config.plex_url, config.plex_token,
                   "/library/sections/%s/refresh" % section["key"],
-                  params={"path": target})
+                  params={"path": target} if target else None)
+        if not target:
+            return "Plex is rescanning all of %s" % _titles(found)
         return "Plex is scanning it into %s" % _titles(found)
     except PlexError as exc:
         return "Plex was not told: %s" % exc
@@ -240,37 +284,40 @@ def suggest_mapping(all_sections: list, tail: list) -> str:
 
 
 def check(config) -> dict:
-    """For the Settings page: can Plex be reached, and which library will
-    the music folder be scanned into."""
+    """For the Settings page: can Plex be reached, which libraries it
+    has (to pick from), and where grabs will be scanned."""
     if not (config.plex_url and config.plex_token):
         return {"ok": False, "detail": "Set the Plex address and token first."}
     try:
         all_sections = sections(config.plex_url, config.plex_token, fresh=True)
     except PlexError as exc:
         return {"ok": False, "detail": str(exc)}
-    target = plex_path(config.music_root, config.music_root, config.plex_music_path)
-    found = sections_for(all_sections, target)
-    libraries = [{"title": s["title"], "type": s["type"], "locations": s["locations"]}
-                 for s in all_sections]
+    base, how = mapping(config, all_sections)
+    found, target = plan(config, all_sections, config.music_root)
+    libraries = [{"key": s["key"], "title": s["title"], "type": s["type"],
+                  "locations": s["locations"]} for s in all_sections]
+    result = {"libraries": libraries, "mapped": base, "mapped_how": how,
+              "chosen": getattr(config, "plex_section", "")}
     if not found:
-        suggestion = suggest_mapping(all_sections, source_parts(config.music_root))
-        # Folders to pick from: music libraries' first, deduplicated, the
-        # likely one leading.
-        choices = [suggestion] if suggestion else []
-        for s in sorted(all_sections, key=lambda s: s["type"] != "artist"):
-            for location in s["locations"]:
-                if s["type"] == "artist" and location not in choices:
-                    choices.append(location)
-        detail = ("Plex answered, but none of its libraries contains %s. "
-                  "Set where Plex sees your music folder" % target)
-        if suggestion:
-            detail += (" - it looks like %s, from the folder mounted as %s."
-                       % (suggestion, config.music_root))
-        else:
-            detail += ": the folder on the Plex machine that is mounted as %s." \
-                % config.music_root
-        return {"ok": False, "libraries": libraries, "detail": detail,
-                "suggestion": suggestion, "choices": choices}
-    return {"ok": True, "libraries": libraries, "section": found[0]["title"],
-            "sections": [s["title"] for s in found],
-            "detail": "Connected. Grabs will be scanned into %s." % _titles(found)}
+        if result["chosen"]:
+            # Deleted, or a different server since it was picked.
+            return dict(result, ok=False, detail=(
+                "Plex answered, but the library chosen in Settings is gone. "
+                "Pick the library to scan."))
+        return dict(result, ok=False, detail=(
+            "Plex answered, but none of its libraries contains %s. Pick the "
+            "library to scan." % (target or config.music_root)))
+    result.update(ok=True, section=found[0]["title"],
+                  sections=[s["title"] for s in found])
+    if not target:
+        result["detail"] = (
+            "Connected. Each grab rescans all of %s, since Beetdrop cannot tell "
+            "which of its folders is %s. To scan only the new folder, set where "
+            "Plex sees the music folder." % (_titles(found), config.music_root))
+    elif how == "mount":
+        result["detail"] = (
+            "Connected. Grabs will be scanned into %s, at %s - the folder "
+            "mounted here as %s." % (_titles(found), target, config.music_root))
+    else:
+        result["detail"] = "Connected. Grabs will be scanned into %s." % _titles(found)
+    return result
