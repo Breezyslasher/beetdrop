@@ -691,3 +691,50 @@ def test_the_search_carries_the_artist_from_the_videos_tags(tmp_path):
     backfill_video_art([tmp_path / "music"], search=lambda q: asked.append(q) or [],
                        sleep=lambda s: None)
     assert asked == ["Kana-Boon - fish"]
+
+
+class TestTitlesFromTags:
+    def test_a_disc_and_track_number_is_dropped(self):
+        from beetdrop.videoart import search_query
+        assert search_query(Path("1-13 From The D 2 The LBC.mp4")) == "From The D 2 The LBC"
+        assert search_query(Path("1-800-273-8255.mp4")) == "1-800-273-8255"
+
+    def test_the_song_beside_it_gives_the_title(self, tmp_path):
+        from beetdrop.fulltags import FullTags, write_full_tags
+        from beetdrop.videoart import video_title
+        if not have_ffmpeg():
+            pytest.skip("ffmpeg unavailable")
+        song = tmp_path / "1-13 From The D 2 The LBC (feat. Snoop.opus"
+        subprocess.run(["ffmpeg", "-f", "lavfi", "-i", "sine=duration=1", "-c:a",
+                        "libopus", str(song), "-y", "-loglevel", "error"],
+                       check=True, timeout=60)
+        write_full_tags(song, FullTags(title="From The D 2 The LBC", artist="Eminem",
+                                       album_artist="Eminem", album="Curtain Call 2"))
+        video = song.with_suffix(".mp4")
+        video.write_bytes(b"x")
+        assert video_title(video) == "From The D 2 The LBC"
+
+    def test_the_kind_still_comes_from_the_file_name(self):
+        # Titled cleanly from tags, but the file says it is the lyric video.
+        from beetdrop.videoart import match_on_youtube
+        hits = [yt("Thank God for Girls (Official Video)", 200, ("Weezer",)),
+                yt("Thank God for Girls [Lyrics]", 200, ("Weezer",), "lllllllllll")]
+        found, _ = match_on_youtube("Weezer - Thank God for Girls", 200.0, hits,
+                                    kind_from="Weezer - Thank God for Girls (Lyrics)")
+        assert found.video_id == "lllllllllll"
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+def test_the_search_uses_the_title_from_tags(tmp_path):
+    from mutagen.mp4 import MP4
+    video = tmp_path / "music" / "Eminem" / "1-13 From The D 2 The LBC (feat. Sn.mp4"
+    make_mp4(video)
+    tagged = MP4(str(video))
+    if tagged.tags is None:
+        tagged.add_tags()
+    tagged.tags["\xa9nam"] = ["From The D 2 The LBC"]
+    tagged.save()
+    asked = []
+    backfill_video_art([tmp_path / "music"], search=lambda q: asked.append(q) or [],
+                       sleep=lambda s: None)
+    assert asked == ["Eminem - From The D 2 The LBC"]
