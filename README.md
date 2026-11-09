@@ -229,6 +229,10 @@ filled in with the artist and title the automatic search would use.
 Search YouTube, see each result's thumbnail, channel and length - and
 how far that is from the file's own - and pick one: its full-size
 thumbnail is embedded, marked as chosen by hand.
+To change the picture of a video that already has one, **find a music
+video in your library** by name (every word, in its name or folder):
+each shows the artwork it has now, and a pick replaces it. Send artwork
+to Plex sees the change and sends the new picture.
 
 Plex does not read a music video's embedded artwork - it makes its own
 thumbnail from a frame. With Plex set up, **Send artwork to Plex** (on
@@ -416,6 +420,7 @@ POST /api/plex/pin                GET  /api/plex/pin/{id}
 POST /api/plex/pin/{id}/server     POST /api/videos/embed-art
 POST /api/plex/send-artwork
 GET  /api/videos/missing-art      GET /api/videos/art-candidates   POST /api/videos/art
+GET  /api/videos/find             GET /api/videos/artwork
 ```
 
 ## Running it

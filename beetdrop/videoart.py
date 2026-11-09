@@ -775,10 +775,33 @@ def backfill_video_art(roots: Iterable[Path],
 # For the videos no rule could settle: list them, let a person search
 # YouTube and pick the right video, and embed that one's thumbnail.
 
+def _describe(video: Path, roots: list, has_art: bool) -> dict:
+    """One video as the page shows it: path, name, folder, length, whether
+    it has artwork and whether Beetdrop may write it, and a suggested
+    search - the artist and title as the automatic search would put them."""
+    folder = video.parent.name
+    for root in roots:
+        try:
+            folder = str(video.parent.resolve().relative_to(root.resolve()))
+            break
+        except (ValueError, OSError):
+            continue
+    try:
+        length = round(video_length(video))
+    except Exception:
+        length = 0
+    title = video_title(video) or search_query(video)
+    return {"path": str(video), "name": video.name, "folder": folder,
+            "duration": length, "has_art": has_art,
+            # Artwork is written to a copy beside it that then replaces
+            # it: both the folder and the file must be Beetdrop's to change.
+            "writable": (os.access(video.parent, os.W_OK | os.X_OK)
+                         and os.access(video, os.W_OK)),
+            "query": with_artist(title, video_artist(video, roots))}
+
+
 def list_missing_art(roots: Iterable[Path], limit: int = 50) -> tuple:
-    """([videos with no embedded artwork, up to `limit`], how many in all).
-    Each: its path, name, folder, length, and a suggested search - the
-    artist and title as the automatic search would put them."""
+    """([videos with no embedded artwork, up to `limit`], how many in all)."""
     roots = list(roots)
     found, total = [], 0
     for video in iter_videos(roots):
@@ -789,28 +812,32 @@ def list_missing_art(roots: Iterable[Path], limit: int = 50) -> tuple:
         if covered:
             continue
         total += 1
-        if len(found) >= limit:
+        if len(found) < limit:
+            found.append(_describe(video, roots, False))
+    return found, total
+
+
+def find_videos(roots: Iterable[Path], query: str, limit: int = 50) -> tuple:
+    """([music videos whose name or folder has every word of `query`, up
+    to `limit`], how many in all) - with artwork or without, to change
+    the picture of one already done."""
+    from .matching import normalize
+    roots = list(roots)
+    words = normalize(query).split()
+    if not words:
+        return [], 0
+    found, total = [], 0
+    for video in iter_videos(roots):
+        haystack = normalize(str(video.parent) + " " + video.stem)
+        if not all(word in haystack for word in words):
             continue
-        folder = video.parent.name
-        for root in roots:
-            try:
-                folder = str(video.parent.resolve().relative_to(root.resolve()))
-                break
-            except (ValueError, OSError):
-                continue
         try:
-            length = round(video_length(video))
+            covered, _link = _inspect(video)
         except Exception:
-            length = 0
-        title = video_title(video) or search_query(video)
-        found.append({"path": str(video), "name": video.name, "folder": folder,
-                      "duration": length,
-                      # Artwork is written to a copy beside it that then
-                      # replaces it: both the folder and the file must be
-                      # Beetdrop's to change.
-                      "writable": (os.access(video.parent, os.W_OK | os.X_OK)
-                                   and os.access(video, os.W_OK)),
-                      "query": with_artist(title, video_artist(video, roots))})
+            continue
+        total += 1
+        if len(found) < limit:
+            found.append(_describe(video, roots, covered))
     return found, total
 
 
