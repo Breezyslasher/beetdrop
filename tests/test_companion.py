@@ -424,15 +424,16 @@ class TestTheJobRunsIt:
             self.finished(client, job["id"])
         assert self.asked == []
 
-    def test_a_track_sent_to_review_gets_no_video(self, tmp_path, monkeypatch):
-        # Its title is YouTube's guess and changes when the match is
-        # fixed; a video named for it now would be named for nothing.
+    def test_a_track_sent_to_review_gets_its_video_too(self, tmp_path, monkeypatch):
+        # The video is named for the audio file, and fixing the match later
+        # carries it along, so an unverified track need not go without.
+        # (It did once, when the video was named for the title.)
         with self.client(tmp_path, monkeypatch, verified=False) as client:
             job = client.post("/api/grab", json={
                 "video_id": "abc", "with_video": True}).json()
             done = self.finished(client, job["id"])
-        assert self.asked == [] and done["stage"] == "done"
-        assert "_review" in done["detail"]
+        assert len(self.asked) == 1 and done["stage"] == "done"
+        assert "music video filed beside it" in done["detail"]
 
 
 class TestRenamingOnStartup:
