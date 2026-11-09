@@ -1206,7 +1206,9 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
         try:
             await asyncio.to_thread(choose_art, video, body.video_id)
         except LookupError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+            # 404, not 502: a proxy in front (Cloudflare) may answer a 502
+            # with its own page, and the reason would never reach this one.
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except Exception as exc:
             # Said in words - a bare 500 reached the page as an empty
             # message - and logged in full for the container log.

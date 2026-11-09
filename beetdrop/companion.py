@@ -176,8 +176,12 @@ def pick_music_video(candidates: list, title: str, artist: str,
 THUMB_TIMEOUT = 10
 # Widest first. YouTube's default "hqdefault" is 480x360 with black bars
 # above and below a 16:9 picture; maxresdefault (1280x720) and hq720 are
-# the frame itself, and exist for most official videos.
+# the frame itself, and exist for most official videos - but not for
+# older uploads (2009's, say), which have only the smaller sizes. Those
+# come last: letterboxed is better than none, and hqdefault is there
+# for every video.
 _THUMB_NAMES = ("maxresdefault.jpg", "hq720.jpg")
+_THUMB_FALLBACKS = ("sddefault.jpg", "hqdefault.jpg")
 
 
 def _image_kind(data: bytes) -> str:
@@ -205,6 +209,9 @@ def fetch_thumbnail(video_id: str, fallback_url: str = "") -> Optional[tuple]:
             for name in _THUMB_NAMES] if video_id else []
     if fallback_url:
         urls.append(fallback_url)
+    if video_id:
+        urls += ["https://i.ytimg.com/vi/%s/%s" % (video_id, name)
+                 for name in _THUMB_FALLBACKS]
     for url in urls:
         try:
             response = requests.get(url, timeout=THUMB_TIMEOUT,
