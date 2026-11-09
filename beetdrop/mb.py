@@ -3,7 +3,8 @@ SQLite response cache.
 
 MusicBrainz allows one request per second per client and blocks
 offenders, so every call goes through a hard serialising limiter (a
-lock plus a monotonic-clock gate). Responses are cached with a long
+lock plus a monotonic-clock gate). When it refuses anyway (503), every
+request backs off together and tries again. Responses are cached with a long
 TTL - metadata does not change hourly.
 """
 
@@ -33,6 +34,21 @@ USER_AGENT = "%s/%s (+https://github.com/Breezyslasher/Youtube-Music-DL)" % (
 
 class MBError(RuntimeError):
     pass
+
+
+class MBBusy(MBError):
+    """MusicBrainz is refusing for now - rate limited or overloaded -
+    as distinct from saying no to the request itself."""
+
+
+# MusicBrainz answers 503 to a client over its rate limit, and when the
+# whole service is over capacity; the others are a proxy or load
+# balancer in between having a bad moment. All pass if asked again
+# later, so each is retried a few times with growing pauses - about a
+# minute at most - before giving up.
+BUSY = (429, 500, 502, 503, 504)
+BACKOFF = (2.0, 5.0, 15.0, 30.0)
+MAX_BACKOFF = 60.0
 
 
 def _lucene_escape(text: str) -> str:
@@ -72,6 +88,19 @@ class MusicBrainzClient:
                 time.sleep(self._next_ok - now)
             self._next_ok = time.monotonic() + MIN_INTERVAL
 
+    def _back_off(self, response, fallback: float) -> None:
+        """Hold every request, not just this one, for as long as
+        MusicBrainz asked: it limits by address, so another job asking
+        in the meantime only extends the refusal."""
+        wait = fallback
+        try:
+            wait = float(response.headers.get("Retry-After") or fallback)
+        except ValueError:
+            pass
+        wait = max(MIN_INTERVAL, min(wait, MAX_BACKOFF))
+        with self._gate_lock:
+            self._next_ok = max(self._next_ok, time.monotonic() + wait)
+
     def _cached_get(self, url: str) -> dict:
         with self._db_lock:
             row = self._db.execute(
@@ -79,12 +108,18 @@ class MusicBrainzClient:
             ).fetchone()
         if row and time.time() - row[1] <= CACHE_TTL:
             return json.loads(row[0])
-        self._gate()
-        try:
-            response = requests.get(url, timeout=TIMEOUT,
-                                    headers={"User-Agent": USER_AGENT})
-        except requests.RequestException as exc:
-            raise MBError("MusicBrainz unreachable: %s" % exc) from exc
+        for attempt in range(len(BACKOFF) + 1):
+            self._gate()
+            try:
+                response = requests.get(url, timeout=TIMEOUT,
+                                        headers={"User-Agent": USER_AGENT})
+            except requests.RequestException as exc:
+                raise MBError("MusicBrainz unreachable: %s" % exc) from exc
+            if response.status_code not in BUSY or attempt == len(BACKOFF):
+                break
+            self._back_off(response, BACKOFF[attempt])
+        if response.status_code in BUSY:
+            raise MBBusy("MusicBrainz is busy (answered %d)" % response.status_code)
         if not response.ok:
             raise MBError("MusicBrainz answered %d" % response.status_code)
         data = response.json()

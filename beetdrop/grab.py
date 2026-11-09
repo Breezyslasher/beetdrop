@@ -24,6 +24,7 @@ from .config import Config
 from .download import DownloadError, download_audio, download_video
 from .fulltags import FullTags, verify_audio, write_full_tags
 from .library import (
+    TrackResolution,
     album_dir,
     place_file,
     resolve_album,
@@ -33,7 +34,7 @@ from .library import (
     write_lyrics_sidecar,
 )
 from .lyrics import fetch_synced_lyrics
-from .mb import MusicBrainzClient
+from .mb import MBError, MusicBrainzClient
 from .search import AlbumLookup, Result, lookup_album, lookup_video
 from .videos import video_dir, video_filename, write_nfo, write_poster
 
@@ -50,10 +51,33 @@ class GrabOutcome:
     # What the track was filed as - a companion music video is named for
     # this title, since it is the one Plex shows.
     tags: Optional[FullTags] = None
+    # Said on the job card: why a grab that would have been checked was
+    # not - MusicBrainz busy, say.
+    note: str = ""
 
 
 def _noop(*args) -> None:
     pass
+
+
+def _resolve(mb, result: Result, logger) -> tuple:
+    """(resolution, note). MusicBrainz busy or down is not a reason to
+    throw away a download that worked: the track is filed unverified, to
+    _review, under YouTube's names - what a no-match grab gets - and can
+    be matched later from Settings."""
+    try:
+        return resolve_track(mb, result.title, result.primary_artist,
+                             result.duration_seconds), ""
+    except MBError as exc:
+        if logger is not None:
+            logger.add("MusicBrainz: %s - filed unverified" % exc)
+        artist = result.primary_artist or "Unknown Artist"
+        return TrackResolution(
+            tags=FullTags(title=result.title, artist=artist, album_artist=artist,
+                          album=result.title, unverified=True),
+            matched=False), (
+            "not checked against MusicBrainz (%s): filed to _review - "
+            "match it from Settings once MusicBrainz answers" % exc)
 
 
 # One MusicBrainz client per cache file, shared across worker threads so
@@ -153,8 +177,7 @@ def run_grab(
 
         on_stage("matching")
         mb = get_mb_client(config)
-        resolution = resolve_track(
-            mb, result.title, result.primary_artist, result.duration_seconds)
+        resolution, note = _resolve(mb, result, logger)
         tags = resolution.tags
         cover = mb.fetch_cover(
             release_mbid=tags.release_mbid,
@@ -166,7 +189,7 @@ def run_grab(
         final = _finish_into_library(config, audio_path, tags, cover,
                                      result.duration_seconds)
         return GrabOutcome(inbox_path=final, result=result,
-                           verified=resolution.matched, tags=tags)
+                           verified=resolution.matched, tags=tags, note=note)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
@@ -239,8 +262,7 @@ def run_video_grab(
 
         on_stage("matching")
         mb = get_mb_client(config)
-        resolution = resolve_track(
-            mb, result.title, result.primary_artist, result.duration_seconds)
+        resolution, _note = _resolve(mb, result, logger)
         if resolution.matched:
             tags = resolution.tags
         else:
