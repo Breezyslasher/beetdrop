@@ -52,10 +52,36 @@ def installed_version() -> str:
     return yt_dlp.version.__version__
 
 
+def _unwrap_urllib3() -> None:
+    """Undo yt-dlp's patch of urllib3 before yt-dlp is imported again.
+
+    Importing yt_dlp.networking._requests wraps urllib3's _PERCENT_RE in
+    a proxy object. urllib3 is not reloaded with yt-dlp, so a second
+    import wraps the proxy in another - and the outer proxy's attribute
+    pass-through (`self.re.__getattribute__`) skips the inner one's, so
+    `.sub` is lost and every request through urllib3 fails ("object has
+    no attribute 'sub'"): YouTube Music search, MusicBrainz, everything.
+    Peeling back to the real pattern lets the fresh import wrap it once.
+    """
+    try:
+        import urllib3.util.url as url
+    except ImportError:
+        return
+    pattern = getattr(url, "_PERCENT_RE", None)
+    while pattern is not None and not isinstance(pattern, re.Pattern):
+        inner = getattr(pattern, "__dict__", {}).get("re")
+        if inner is None:
+            return  # not yt-dlp's wrapper; leave it alone
+        pattern = inner
+    if pattern is not None:
+        url._PERCENT_RE = pattern
+
+
 def _swap_loaded_module() -> str:
     """Purge the loaded yt_dlp and rebind the download module to the
     fresh import. Objects held by an in-flight download keep working -
     they reference the old module's objects directly."""
+    _unwrap_urllib3()
     for name in list(sys.modules):
         if name == "yt_dlp" or name.startswith("yt_dlp."):
             del sys.modules[name]
