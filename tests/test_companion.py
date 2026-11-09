@@ -468,6 +468,8 @@ JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 64
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 
 
+# Builds a real mp4, as TestGrabbingIt does; CI has no ffmpeg.
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
 class TestArtwork:
     def grab(self, tmp_path, fetch_art):
         audio = library_track(tmp_path)
