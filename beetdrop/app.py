@@ -1142,6 +1142,23 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
                  "Library lyrics scan")
         return store.update_job(job["id"], title=title) or job
 
+    @app.post("/api/videos/embed-art", status_code=202, dependencies=[protected])
+    async def api_videos_embed_art():
+        """Embed the artwork already beside music videos - "-thumb.jpg",
+        "-poster.jpg", or one named like the video - into the videos that
+        have none. Runs as a cancellable job: it rewrites every video it
+        touches, which takes a while across a library."""
+        existing = store.find_duplicate("__videoart__", "videoart")
+        if existing is not None and existing["stage"] not in (
+                "done", "failed", "cancelled"):
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "artwork is already being embedded",
+                        "existing_job": {k: existing[k] for k in
+                                         ("id", "title", "stage", "created_at")}})
+        job = manager.enqueue("__videoart__", kind="videoart")
+        return store.update_job(job["id"], title="Embed music video artwork") or job
+
     @app.get("/events", dependencies=[protected])
     async def events(request: Request):
         queue = broadcaster.subscribe()
