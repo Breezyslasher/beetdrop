@@ -562,3 +562,36 @@ class TestFetchingTheThumbnail:
         self.serve(monkeypatch, {self.MAXRES: self.Response(200, webp),
                                  self.HQ720: self.Response(200, b"<html>")})
         assert fetch_thumbnail("abc", "") is None
+
+
+class TestOlderVideos:
+    """A 2009 upload has no maxresdefault or hq720 - only the smaller
+    sizes. Picking one by hand answered 'no thumbnail'."""
+
+    class Response:
+        def __init__(self, status, content=b""):
+            self.status_code, self.content = status, content
+
+    def serve(self, monkeypatch, pages):
+        import requests
+        asked = []
+
+        def get(url, **kwargs):
+            asked.append(url.rsplit("/", 1)[-1])
+            return pages.get(url.rsplit("/", 1)[-1], self.Response(404))
+
+        monkeypatch.setattr(requests, "get", get)
+        return asked
+
+    def test_the_smaller_sizes_are_tried_last(self, monkeypatch):
+        from beetdrop.companion import fetch_thumbnail
+        asked = self.serve(monkeypatch, {"hqdefault.jpg": self.Response(200, JPEG)})
+        assert fetch_thumbnail("old", "") == (JPEG, "image/jpeg")
+        assert asked == ["maxresdefault.jpg", "hq720.jpg", "sddefault.jpg", "hqdefault.jpg"]
+
+    def test_a_wide_one_still_comes_first(self, monkeypatch):
+        from beetdrop.companion import fetch_thumbnail
+        asked = self.serve(monkeypatch, {"hq720.jpg": self.Response(200, PNG),
+                                         "hqdefault.jpg": self.Response(200, JPEG)})
+        assert fetch_thumbnail("new", "") == (PNG, "image/png")
+        assert asked == ["maxresdefault.jpg", "hq720.jpg"]

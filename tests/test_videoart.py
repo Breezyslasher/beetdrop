@@ -841,3 +841,19 @@ def test_the_list_says_which_cannot_be_written(tmp_path, monkeypatch):
                         lambda path, mode: "Both" not in str(path) and real(path, mode))
     videos, _ = list_missing_art([music])
     assert {v["name"]: v["writable"] for v in videos} == {"a.mp4": True, "b.mp4": False}
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+def test_no_thumbnail_at_all_is_a_404_with_the_reason(tmp_path, monkeypatch):
+    # A 502 was swapped for a proxy's own page on the way, reason and all.
+    import beetdrop.videoart as videoart
+    music = tmp_path / "music"
+    video = music / "Green Day" / "21st Century Breakdown.mp4"
+    make_mp4(video)
+    monkeypatch.setattr(videoart, "fetch_thumbnail", lambda vid, url="": None)
+    config = Config(music_root=music, scratch_root=tmp_path / "s", config_dir=tmp_path / "c")
+    with TestClient(create_app(config)) as client:
+        response = client.post("/api/videos/art", json={"path": str(video),
+                                                        "video_id": "fffffffffff"})
+    assert response.status_code == 404
+    assert response.json()["detail"] == "YouTube has no thumbnail for that video"
