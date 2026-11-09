@@ -47,6 +47,8 @@ class PlexArt:
     videos: int = 0        # music video extras Plex listed
     sent: int = 0
     refreshed: int = 0     # upload refused; Plex asked to re-read the file instead
+    reselected: int = 0    # sent before, but Plex was showing another picture
+    resent: int = 0        # of sent: sent before, but Plex no longer had it
     unchanged: int = 0     # this picture was sent before
     no_art: int = 0        # the file has no embedded artwork
     not_here: int = 0      # Plex's file is not under the music folder here
@@ -186,6 +188,29 @@ def send_artwork(config, on_progress: Callable[[float], None] = _noop,
             on_detail("Plex sees the music folder at %s" % found[1])
         return found[0]
 
+    def _pictures(key: str) -> Optional[list]:
+        """The pictures Plex has for an item, [{key, selected}], or None
+        when it will not say."""
+        try:
+            listing = _container(_call("GET", url, token,
+                                       "/library/metadata/%s/posters" % key))
+        except PlexError:
+            return None
+        return [{"key": str(p.get("ratingKey") or p.get("key") or ""),
+                 "selected": bool(p.get("selected"))}
+                for p in listing.get("Metadata") or listing.get("Photo") or []
+                if p.get("ratingKey") or p.get("key")]
+
+    def _select(key: str, picture: str) -> bool:
+        """Choose one of an item's pictures, as python-plexapi's
+        Poster.select() does: PUT .../poster?url=<its key>."""
+        try:
+            _call("PUT", url, token, "/library/metadata/%s/poster" % key,
+                  params={"url": picture})
+            return True
+        except PlexError:
+            return False
+
     def give(key: str, title: str, here: Optional[Path], plex_file: str = "") -> bool:
         """Get this music video's embedded art into Plex. False when
         Plex has refused often enough in a row to stop."""
@@ -202,9 +227,33 @@ def send_artwork(config, on_progress: Callable[[float], None] = _noop,
             result.no_art += 1
             return True
         digest = hashlib.sha1(art[0]).hexdigest()
-        if sent_here.get(key) == digest:
-            result.unchanged += 1
-            return True
+        # What was sent is remembered as "<image hash>|<Plex's key for the
+        # uploaded picture>" (only the hash, by versions before 0.74.3).
+        sent_digest, _, sent_picture = sent_here.get(key, "").partition("|")
+        pictures = _pictures(key)
+        if sent_digest == digest:
+            if pictures is None:
+                result.unchanged += 1      # cannot look; trust what was sent
+                return True
+            ours = next((p for p in pictures if p["key"] == sent_picture), None) \
+                if sent_picture else None
+            if ours is not None and ours["selected"]:
+                result.unchanged += 1
+                return True
+            if ours is not None:
+                # Plex has it but shows another: choose it again.
+                if _select(key, ours["key"]):
+                    result.reselected += 1
+                    on_detail("chose the artwork again for %s" % (title or here.name))
+                    return True
+            elif not sent_picture and any(p["selected"] and p["key"].startswith("upload://")
+                                          for p in pictures):
+                result.unchanged += 1      # sent by an older version; showing
+                return True
+            # Gone - Plex made the item anew when the file changed - or not
+            # chosen: send it again.
+            result.resent += 1
+        before = {p["key"] for p in pictures or []}
         try:
             _call("POST", url, token, "/library/metadata/%s/posters" % key,
                   data=art[0], content_type=art[1])
@@ -228,7 +277,14 @@ def send_artwork(config, on_progress: Callable[[float], None] = _noop,
             on_detail("asked Plex to refresh %s" % (title or here.name))
             return True
         failing[0] = 0
-        sent_here[key] = digest
+        # Uploading adds the picture to the item's choices; Plex does not
+        # always show it. Find it and choose it.
+        after = _pictures(key) or []
+        new = [p for p in after if p["key"] not in before]
+        mine = new[-1] if new else None
+        if mine is not None and not mine["selected"]:
+            _select(key, mine["key"])
+        sent_here[key] = digest + ("|" + mine["key"] if mine is not None else "")
         result.sent += 1
         on_detail("sent artwork for %s" % (title or here.name))
         if result.sent % 25 == 0:

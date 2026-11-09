@@ -242,7 +242,13 @@ class JobManager:
                           % (result.sent, result.videos))
                 extras = []
                 if result.unchanged:
-                    extras.append("%d sent before" % result.unchanged)
+                    extras.append("%d sent before and showing" % result.unchanged)
+                if result.reselected:
+                    extras.append("%d sent before but not shown, chosen again"
+                                  % result.reselected)
+                if result.resent:
+                    extras.append("%d of those sent were missing from Plex and sent again"
+                                  % result.resent)
                 if result.no_art:
                     extras.append("%d with no artwork in the file" % result.no_art)
                 if result.not_here:
