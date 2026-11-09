@@ -391,3 +391,131 @@ class TestTellingPlex:
     def test_nothing_changed_asks_plex_nothing(self, tmp_path):
         done, refreshes = self.run_job(tmp_path, with_image=False)
         assert refreshes == [] and "Plex" not in done["detail"]
+
+
+def yt(title, seconds, artists=("Rick Astley",), vid="dQw4w9WgXcQ"):
+    from beetdrop.search import Result
+    return Result(video_id=vid, title=title, raw_title=title,
+                  artists=list(artists), duration_seconds=seconds,
+                  thumbnail_url="https://i.ytimg.com/vi/%s/hqdefault.jpg" % vid)
+
+
+class TestTheSearchRules:
+    def test_what_is_searched_for(self):
+        from beetdrop.videoart import search_query
+        assert search_query(Path("07 - Caleb Hyles - Idolize.mp4")) == "Caleb Hyles - Idolize"
+        assert search_query(Path("2-03 - Song-video.mp4")) == "Song"
+        assert search_query(Path("Rick Astley - Never Gonna Give You Up "
+                                 "(Official Music Video).mp4")).startswith("Rick Astley")
+
+    def test_title_and_length_both_matching_is_taken(self):
+        from beetdrop.videoart import match_on_youtube
+        found, _ = match_on_youtube(
+            "Rick Astley - Never Gonna Give You Up (Official Music Video)", 212.4,
+            [yt("Rick Astley - Never Gonna Give You Up (Official Music Video)", 213)])
+        assert found is not None and found.video_id == "dQw4w9WgXcQ"
+
+    def test_the_artist_can_come_from_the_result(self):
+        # "Ed Sheeran - One" against a video titled just "One" by Ed Sheeran.
+        from beetdrop.videoart import match_on_youtube
+        found, _ = match_on_youtube("Ed Sheeran - One", 255.0,
+                                    [yt("One [Official Video]", 255, ("Ed Sheeran",))])
+        assert found is not None
+
+    def test_the_right_title_at_the_wrong_length_is_refused(self):
+        # A lyric video, a live cut, a re-upload with an intro.
+        from beetdrop.videoart import match_on_youtube
+        found, closest = match_on_youtube(
+            "Rick Astley - Never Gonna Give You Up", 212.0,
+            [yt("Rick Astley - Never Gonna Give You Up", 240)])
+        assert found is None and "+28s" in closest
+
+    def test_the_right_length_with_another_title_is_refused(self):
+        from beetdrop.videoart import match_on_youtube
+        found, closest = match_on_youtube(
+            "Rick Astley - Never Gonna Give You Up", 212.0,
+            [yt("Rick Astley - Together Forever", 212)])
+        assert found is None and "Together Forever" in closest
+
+    def test_of_several_the_closest_length_wins(self):
+        from beetdrop.videoart import match_on_youtube
+        found, _ = match_on_youtube("Song", 200.0, [
+            yt("Song", 202, vid="aaaaaaaaaaa"), yt("Song", 200, vid="bbbbbbbbbbb")])
+        assert found.video_id == "bbbbbbbbbbb"
+
+    def test_no_length_is_no_match(self):
+        from beetdrop.videoart import match_on_youtube
+        found, _ = match_on_youtube("Song", 200.0, [yt("Song", None)])
+        assert found is None
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg unavailable")
+class TestSearchingInARun:
+    """make_mp4 files are one second long; the fake results are timed to
+    match or not."""
+
+    def test_found_for_certain_is_embedded(self, tmp_path):
+        from mutagen.mp4 import MP4
+        video = tmp_path / "07 - Caleb Hyles - Idolize.mp4"
+        make_mp4(video)
+        asked, fetched, slept = [], [], []
+        result = backfill_video_art(
+            [tmp_path],
+            search=lambda q: asked.append(q) or [yt("Caleb Hyles - Idolize", 1,
+                                                    ("Caleb Hyles",), "ccccccccccc")],
+            fetch_art=lambda vid, url: fetched.append(vid) or (JPEG, "image/jpeg"),
+            sleep=slept.append)
+        assert asked == ["Caleb Hyles - Idolize"] and fetched == ["ccccccccccc"]
+        assert (result.searched, result.from_search, result.embedded) == (1, 1, 1)
+        assert bytes(MP4(str(video))["covr"][0]) == JPEG
+        assert slept == []      # no pause before the first search
+
+    def test_not_certain_is_skipped_and_shown_in_the_log(self, tmp_path):
+        make_mp4(tmp_path / "Song A.mp4")
+        make_mp4(tmp_path / "Song B.mp4")
+        slept = []
+        result = backfill_video_art(
+            [tmp_path], search=lambda q: [yt(q, 300)],
+            fetch_art=lambda vid, url: pytest.fail("fetched anyway"),
+            sleep=slept.append)
+        assert (result.searched, result.no_match, result.embedded) == (2, 2, 0)
+        assert slept == [1.0]   # paced between searches
+        assert "Searched YouTube, nothing certain enough" in result.report()
+        assert "length +299s" in result.report()
+
+    def test_an_image_or_link_means_no_search(self, tmp_path):
+        make_mp4(tmp_path / "a.mp4")
+        (tmp_path / "a-thumb.jpg").write_bytes(JPEG)
+        result = backfill_video_art(
+            [tmp_path], search=lambda q: pytest.fail("searched anyway"))
+        assert result.embedded == 1 and result.searched == 0
+
+    def test_it_gives_up_when_youtube_keeps_refusing(self, tmp_path):
+        from beetdrop.videoart import GIVE_UP_AFTER
+        for n in range(GIVE_UP_AFTER + 3):
+            make_mp4(tmp_path / ("Song %d.mp4" % n))
+        calls = []
+
+        def refusing(query):
+            calls.append(query)
+            raise RuntimeError("HTTP 429")
+
+        result = backfill_video_art([tmp_path], search=refusing, sleep=lambda s: None)
+        assert len(calls) == GIVE_UP_AFTER
+        assert "HTTP 429" in result.search_stopped
+        assert "Searching YouTube stopped" in result.report()
+
+    def test_without_asking_nothing_is_searched(self, tmp_path):
+        make_mp4(tmp_path / "Song.mp4")
+        result = backfill_video_art([tmp_path])
+        assert result.searched == 0 and result.no_image == 1
+
+
+class TestTheJobOptions:
+    def test_markers_and_titles(self):
+        from beetdrop.jobs import videoart_marker, videoart_title
+        assert videoart_marker(False, False) == "__videoart__"
+        assert videoart_marker(True, True) == "__videoart_convert_search__"
+        assert videoart_title(True, True) == (
+            "Convert WebM/MKV and search YouTube, then embed music video artwork")
+        assert videoart_title(False, False) == "Embed music video artwork"

@@ -57,6 +57,13 @@ class ArtBackfill:
     no_thumbnail: int = 0  # had a YouTube link, but no thumbnail could be fetched
     not_mp4: int = 0       # WebM or Matroska named .mp4: cannot hold MP4 art
     converted: int = 0     # of those, remuxed into a real MP4 (when asked)
+    from_search: int = 0   # of embedded: found by searching YouTube for its name
+    searched: int = 0      # searched for, when asked
+    no_match: int = 0      # searched, and nothing was sure enough to use
+    search_stopped: str = ""   # why searching was abandoned part-way, if it was
+    # A few searches that found nothing certain, with the closest result
+    # and what ruled it out - to judge whether the rules are too strict.
+    unmatched: list = field(default_factory=list)
     # Why the failures failed, counted, so the card can say "permission
     # denied" rather than only how many.
     reasons: Counter = field(default_factory=Counter)
@@ -74,6 +81,13 @@ class ArtBackfill:
         if self.left:
             lines.append("WebM/MKV left as they were:")
             lines += ["  %d - %s" % (n, why) for why, n in self.left.most_common()]
+        if self.search_stopped:
+            lines.append("Searching YouTube stopped: %s" % self.search_stopped)
+        if self.unmatched:
+            lines.append("Searched YouTube, nothing certain enough to use:")
+            for name, closest in self.unmatched:
+                lines.append("  %s" % name)
+                lines.append("    closest: %s" % closest)
         if self.missing:
             lines.append("Examples with no image found:")
             for name, images in self.missing:
@@ -120,6 +134,11 @@ def sidecar_image(video: Path) -> Optional[Path]:
 
 def has_cover(video: Path) -> bool:
     return _inspect(video)[0]
+
+
+def video_length(video: Path) -> float:
+    from mutagen.mp4 import MP4
+    return float(MP4(str(video)).info.length or 0)
 
 
 # yt-dlp's --embed-metadata writes the page URL into the comment tag
@@ -265,6 +284,58 @@ def _noop(*args) -> None:
     pass
 
 
+_TRACK_NUMBER = re.compile(r"^\s*(?:\d+-)?\d{1,3}\s*[-.]\s+")
+# A downloaded video is the same stream YouTube serves, so its length
+# agrees to the second; this allows for rounding and container padding.
+LENGTH_SLACK = 2.5
+TITLE_AT_LEAST = 0.9
+SEARCH_PAUSE = 1.0
+GIVE_UP_AFTER = 5     # searches failing in a row: YouTube is refusing
+
+
+def search_query(video: Path) -> str:
+    """What to search YouTube for: the name, without the "07 - " a
+    library adds or a Plex type suffix."""
+    stem = _video_bases(video)[-1]
+    return _TRACK_NUMBER.sub("", stem).strip()
+
+
+def match_on_youtube(query: str, length: float, candidates: list) -> tuple:
+    """(the result to take, or None; a line on the closest one).
+
+    Both must hold, or nothing is taken: the title says the same thing
+    once brackets and punctuation are set aside - checked against the
+    video's title alone and with its artist in front, since a filename
+    is usually "Artist - Title (Official Video)" - and the length is the
+    file's own, to the couple of seconds. Of several that pass, the
+    closest in length.
+    """
+    from .companion import _ratio
+    from .matching import base_title
+
+    want = base_title(query)
+    best, best_gap, closest, closest_score = None, None, "", None
+    for candidate in candidates:
+        names = [candidate.raw_title or candidate.title, candidate.title]
+        for artist in candidate.artists[:2]:
+            names += ["%s - %s" % (artist, n) for n in names[:2]]
+        title_score = max(_ratio(base_title(n), want) for n in names if n)
+        gap = (abs(candidate.duration_seconds - length)
+               if candidate.duration_seconds and length else None)
+        if title_score >= TITLE_AT_LEAST and gap is not None and gap <= LENGTH_SLACK:
+            if best_gap is None or gap < best_gap:
+                best, best_gap = candidate, gap
+            continue
+        score = title_score - (min(gap, 60) / 60 if gap is not None else 1)
+        if closest_score is None or score > closest_score:
+            closest_score = score
+            closest = '"%s" - title %.0f%% alike, %s' % (
+                candidate.raw_title or candidate.title, title_score * 100,
+                "length %+.0fs" % (candidate.duration_seconds - length)
+                if gap is not None else "length unknown")
+    return best, closest or "no results"
+
+
 def _key(text: str) -> str:
     return re.sub(r"[^0-9a-z]", "", text.casefold())
 
@@ -313,7 +384,16 @@ def backfill_video_art(roots: Iterable[Path],
                        on_progress: Callable[[float], None] = _noop,
                        on_detail: Callable[[str], None] = _noop,
                        fetch_art: Callable = fetch_thumbnail,
-                       convert: bool = False) -> ArtBackfill:
+                       convert: bool = False,
+                       search: Optional[Callable] = None,
+                       pause: float = SEARCH_PAUSE,
+                       sleep: Callable[[float], None] = None) -> ArtBackfill:
+    """`search`, when given, is a YouTube video search (a query in, a list
+    of search.Result out), tried for videos with no image beside them and
+    no link in their tags - one search per `pause` seconds."""
+    import time
+    sleep = sleep or time.sleep
+    failing_in_a_row = 0
     result = ArtBackfill()
     videos = iter_videos(roots)
     result.total = len(videos)
@@ -399,6 +479,52 @@ def backfill_video_art(roots: Iterable[Path],
                     result.failed += 1
                     result.reasons[_why(exc, writing=True)] += 1
                 continue
+            if image is None and search is not None and not result.search_stopped:
+                query = search_query(video)
+                try:
+                    length = video_length(video)
+                except Exception:
+                    length = 0.0
+                if query and length:
+                    if result.searched:
+                        sleep(pause)
+                    result.searched += 1
+                    on_detail("searching YouTube for %s" % query)
+                    try:
+                        candidates = search(query)
+                        failing_in_a_row = 0
+                    except Exception as exc:
+                        candidates = None
+                        failing_in_a_row += 1
+                        if failing_in_a_row >= GIVE_UP_AFTER:
+                            result.search_stopped = (
+                                "%d searches in a row failed (%s) - YouTube may be "
+                                "refusing; run it again later" % (
+                                    failing_in_a_row, str(exc)[:120]))
+                    if candidates is not None:
+                        found, closest = match_on_youtube(query, length, candidates)
+                        if found is None:
+                            result.no_match += 1
+                            if len(result.unmatched) < MISSING_EXAMPLES:
+                                result.unmatched.append((video.name, closest))
+                            continue
+                        try:
+                            art = fetch_art(found.video_id, found.thumbnail_url)
+                        except Exception:
+                            art = None
+                        if not art:
+                            result.no_thumbnail += 1
+                            continue
+                        on_detail("embedding the thumbnail of %s" % (
+                            found.raw_title or found.title))
+                        try:
+                            embed_cover(video, *art)
+                            result.embedded += 1
+                            result.from_search += 1
+                        except Exception as exc:
+                            result.failed += 1
+                            result.reasons[_why(exc, writing=True)] += 1
+                        continue
             if image is None:
                 result.no_image += 1
                 if len(result.missing) < MISSING_EXAMPLES:

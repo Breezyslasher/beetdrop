@@ -201,6 +201,17 @@ and checks the result is as long as the original before replacing it.
 One whose codecs play poorly in MP4 (Vorbis audio, say) is left alone,
 and the job log says why.
 
+For videos with no image and no link, **Search YouTube for them, then
+embed artwork** searches YouTube for each by its name - without a
+leading "07 - " or a Plex suffix - and takes a result's thumbnail only
+when both hold: the title says the same thing once brackets and
+punctuation are set aside (with or without the result's artist in
+front), and the length matches the file's own to within 2.5 seconds.
+Of several that pass, the closest in length. Anything less certain is
+skipped, and the log lists a few of those with the closest result and
+what ruled it out. One search a second; after five failed searches in
+a row it stops searching, since YouTube is refusing, and says so.
+
 Finding the right video is strict on identity and loose on length. A
 wrong video beside a track is worse than none, because Plex presents it
 as that song, so anything that is not the same recording by the same

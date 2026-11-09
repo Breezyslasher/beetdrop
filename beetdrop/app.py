@@ -1143,14 +1143,18 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
         return store.update_job(job["id"], title=title) or job
 
     @app.post("/api/videos/embed-art", status_code=202, dependencies=[protected])
-    async def api_videos_embed_art(convert: bool = False):
+    async def api_videos_embed_art(convert: bool = False, search: bool = False):
         """Embed the artwork already beside music videos - "-thumb.jpg",
         "-poster.jpg", or one named like the video - into the videos that
         have none. Runs as a cancellable job: it rewrites every video it
         touches, which takes a while across a library."""
         # convert=true also remuxes WebM/MKV named .mp4 into real MP4s -
         # lossless, same name - so they can hold artwork too.
-        for marker in ("__videoart__", "__videoart_convert__"):
+        # search=true also searches YouTube for videos with no image and
+        # no link, taking a thumbnail only on a matching title and length.
+        from .jobs import videoart_marker, videoart_title
+        for marker in {videoart_marker(c, s) for c in (False, True)
+                       for s in (False, True)}:
             existing = store.find_duplicate(marker, "videoart")
             if existing is not None and existing["stage"] not in (
                     "done", "failed", "cancelled"):
@@ -1159,11 +1163,8 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
                     detail={"message": "artwork is already being embedded",
                             "existing_job": {k: existing[k] for k in
                                              ("id", "title", "stage", "created_at")}})
-        marker = "__videoart_convert__" if convert else "__videoart__"
-        job = manager.enqueue(marker, kind="videoart")
-        return store.update_job(job["id"], title=(
-            "Convert WebM/MKV and embed music video artwork" if convert
-            else "Embed music video artwork")) or job
+        job = manager.enqueue(videoart_marker(convert, search), kind="videoart")
+        return store.update_job(job["id"], title=videoart_title(convert, search)) or job
 
     @app.get("/events", dependencies=[protected])
     async def events(request: Request):

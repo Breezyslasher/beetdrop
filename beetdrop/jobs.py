@@ -35,6 +35,18 @@ class JobCancelled(Exception):
 MAINTENANCE_INTERVAL = 60  # seconds between history-pruning passes
 
 
+def videoart_marker(convert: bool, search: bool) -> str:
+    return "__videoart%s%s__" % ("_convert" if convert else "",
+                                 "_search" if search else "")
+
+
+def videoart_title(convert: bool, search: bool) -> str:
+    steps = (["Convert WebM/MKV"] if convert else []) + (
+        ["search YouTube"] if search else [])
+    return ("%s, then embed music video artwork" % " and ".join(steps)
+            if steps else "Embed music video artwork")
+
+
 class JobManager:
     def __init__(self, store: Store, broadcaster: Broadcaster,
                  config_provider: Callable[[], Config],
@@ -223,14 +235,15 @@ class JobManager:
                 # YouTube thumbnail, by the link in its tags. video_id says
                 # whether WebM/MKV named .mp4 are remuxed into real MP4s.
                 from .videoart import backfill_video_art
-                convert = job["video_id"] == "__videoart_convert__"
-                self._update(job_id, stage="scanning", title=(
-                    "Convert WebM/MKV and embed music video artwork" if convert
-                    else "Embed music video artwork"))
+                convert = "_convert" in job["video_id"]
+                searching = "_search" in job["video_id"]
+                self._update(job_id, stage="scanning", title=videoart_title(
+                    convert, searching))
                 result = backfill_video_art(
                     [config.music_root, config.video_root],
                     on_progress=on_progress, on_detail=on_detail,
-                    convert=convert)
+                    convert=convert,
+                    search=search_videos if searching else None)
                 detail = "embedded artwork in %d of %d music videos" % (
                     result.embedded, result.total)
                 extras = []
@@ -263,6 +276,12 @@ class JobManager:
                 if result.from_youtube:
                     detail += "; %d from YouTube by the link in the file's tags" % (
                         result.from_youtube)
+                if result.searched:
+                    detail += ("; searched YouTube for %d: %d found for certain, "
+                               "%d not sure enough to use" % (
+                                   result.searched, result.from_search, result.no_match))
+                if result.search_stopped:
+                    detail += "; searching stopped part-way - see the log"
                 if result.by_prefix:
                     detail += "; %d matched to an image with a shortened name" % (
                         result.by_prefix)
