@@ -27,6 +27,8 @@ def restore_real_ytdlp(tmp_path):
     yield
     target = str(updater.target_dir(tmp_path / "config"))
     sys.path[:] = [p for p in sys.path if p != target]
+    # The re-import below must not wrap urllib3 a second time.
+    updater._unwrap_urllib3()
     for name in list(sys.modules):
         if name == "yt_dlp" or name.startswith("yt_dlp."):
             del sys.modules[name]
@@ -101,3 +103,33 @@ class TestUpdateAndReload:
         monkeypatch.setattr(updater.subprocess, "run", fake_pip)
         with pytest.raises(RuntimeError, match="no network"):
             updater.update_and_reload(tmp_path / "config")
+
+
+class TestUrllib3SurvivesTheSwap:
+    """yt-dlp wraps urllib3's _PERCENT_RE when its networking module is
+    imported. A swap re-imports yt-dlp but not urllib3, so without care
+    the wrapper got wrapped again and every request through urllib3
+    failed with "'Urllib3PercentREOverride' object has no attribute
+    'sub'" - which is how YouTube Music search broke after an update."""
+
+    def test_requests_still_work_after_swaps(self, tmp_path, restore_real_ytdlp):
+        import re
+
+        import requests
+        import urllib3.util.url as url
+
+        pytest.importorskip("yt_dlp.networking._requests")
+        for _ in range(3):
+            updater._swap_loaded_module()
+        # Wrapped once, around the real pattern.
+        assert isinstance(url._PERCENT_RE.__dict__["re"], re.Pattern)
+        prepared = requests.Request("GET", "https://music.youtube.com/").prepare()
+        assert prepared.url == "https://music.youtube.com/"
+
+    def test_something_else_in_its_place_is_left_alone(self, monkeypatch):
+        import urllib3.util.url as url
+
+        foreign = object()
+        monkeypatch.setattr(url, "_PERCENT_RE", foreign)
+        updater._unwrap_urllib3()
+        assert url._PERCENT_RE is foreign
