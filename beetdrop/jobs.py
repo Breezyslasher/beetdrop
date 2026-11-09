@@ -247,7 +247,7 @@ class JobManager:
                     extras.append("%d sent before but not shown, chosen again"
                                   % result.reselected)
                 if result.resent:
-                    extras.append("%d of those sent were missing from Plex and sent again"
+                    extras.append("%d of those sent were gone from Plex and sent again"
                                   % result.resent)
                 if result.no_art:
                     extras.append("%d with no artwork in the file" % result.no_art)
@@ -270,7 +270,8 @@ class JobManager:
                     detail += "; stopped: " + result.stopped
                 self._update(job_id, stage="done", progress=100.0,
                              detail=detail[:2000], log=(
-                                 ("Not found in the music folder here, as Plex "
+                                 (result.sample + "\n\n" if result.sample else "")
+                                 + ("Not found in the music folder here, as Plex "
                                   "names them:\n" + "\n".join(
                                       "  " + m for m in result.missing) + "\n\n"
                                   if result.missing else "")
