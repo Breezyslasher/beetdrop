@@ -88,8 +88,12 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: beetdrop:smoke
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Read-only. Both builds share one cache scope, and each export
+          # replaces the scope's index: an amd64-only export here used to
+          # drop the arm64 layers the multi-arch build saved, so arm64 -
+          # apt and pip under QEMU emulation - was rebuilt from scratch on
+          # every run (~3.5 min). The multi-arch build below writes it.
+          cache-from: type=gha,scope=beetdrop
 
       - name: Smoke test the image
         run: |
@@ -118,5 +122,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # The only writer, so the cache always holds both architectures.
+          cache-from: type=gha,scope=beetdrop
+          cache-to: type=gha,scope=beetdrop,mode=max
