@@ -244,7 +244,9 @@ const app = createApp({
         throw new Error("password required");
       }
       if (!response.ok) {
-        let detail = response.statusText;
+        // Over HTTP/2 - behind a Cloudflare tunnel, say - there is no
+        // status text, so a bare error would read as nothing at all.
+        let detail = response.statusText || ("the server answered HTTP " + response.status);
         try { detail = (await response.json()).detail || detail; } catch (e) { /* not json */ }
         const err = new Error(typeof detail === "string" ? detail : (detail.message || "request failed"));
         err.status = response.status;

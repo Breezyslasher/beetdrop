@@ -678,6 +678,10 @@
           <span class="note" v-if="video.duration"> ({{ fmtDuration(video.duration) }})</span>
         </p>
         <p class="note">{{ video.folder }}</p>
+        <p v-if="video.writable === false" class="note warntext">
+          Beetdrop can't write in this folder, so artwork can't be added here.
+          Give the user the container runs as (PUID) write access to it.
+        </p>
         <input type="search" v-model="video.query" placeholder="artist and title"
                @keyup.enter="searchArtFor(video)">
         <button type="button" :disabled="video.searching" @click="searchArtFor(video)">
