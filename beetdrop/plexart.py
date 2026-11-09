@@ -38,6 +38,7 @@ ARTIST = 8                 # Plex's metadata type numbers
 TRACK = 10
 STATE_FILE = "plex_artwork_sent.json"
 GIVE_UP_AFTER = 5          # uploads failing in a row: Plex will not take them
+MISSING_EXAMPLES = 8
 
 
 @dataclass
@@ -49,6 +50,9 @@ class PlexArt:
     unchanged: int = 0     # this picture was sent before
     no_art: int = 0        # the file has no embedded artwork
     not_here: int = 0      # Plex's file is not under the music folder here
+    not_mp4: int = 0       # a video Plex lists that is not an MP4 (.mkv, .webm...)
+    # A few that were not found here, as Plex names them - to see why.
+    missing: list = field(default_factory=list)
     failed: int = 0
     reasons: Counter = field(default_factory=Counter)
     stopped: str = ""      # why it gave up part-way, if it did
@@ -135,8 +139,11 @@ def send_artwork(config, on_progress: Callable[[float], None] = _noop,
     if chosen:
         libraries = [chosen]
     elif base:
-        libraries = [s for s in plex.sections_for(all_sections, base)
-                     if s["type"] == "artist"]
+        # Libraries holding the music folder, or held in it - mounted a
+        # folder above several libraries, each is one of its subfolders.
+        libraries = [s for s in all_sections if s["type"] == "artist" and any(
+            _contains(location, base) or _contains(base, location)
+            for location in s["locations"])]
     else:
         # Where Plex sees the music folder is not known; every music
         # library is walked and files are found by the ends of their
@@ -179,11 +186,13 @@ def send_artwork(config, on_progress: Callable[[float], None] = _noop,
             on_detail("Plex sees the music folder at %s" % found[1])
         return found[0]
 
-    def give(key: str, title: str, here: Optional[Path]) -> bool:
+    def give(key: str, title: str, here: Optional[Path], plex_file: str = "") -> bool:
         """Get this music video's embedded art into Plex. False when
         Plex has refused often enough in a row to stop."""
         if here is None or not here.is_file():
             result.not_here += 1
+            if len(result.missing) < MISSING_EXAMPLES:
+                result.missing.append(plex_file or title or key)
             return True
         try:
             art = embedded_art(here)
@@ -248,7 +257,22 @@ def send_artwork(config, on_progress: Callable[[float], None] = _noop,
                 video = next((song.with_suffix(ext) for ext in VIDEO_EXTS
                               if song is not None and song.with_suffix(ext).is_file()),
                              None)
-                if not give(key, track.get("title") or "", video):
+                plex_file = ""
+                if video is None:
+                    # Not named like the song here: ask Plex which file it
+                    # linked, rather than guess.
+                    try:
+                        item = _container(_call("GET", url, token,
+                                                "/library/metadata/%s" % key))
+                        found = [f for m in item.get("Metadata") or [] for f in _files(m)]
+                    except PlexError:
+                        found = []
+                    plex_file = found[0] if found else audio[0]
+                    if found and not found[0].lower().endswith(VIDEO_EXTS):
+                        result.not_mp4 += 1
+                        continue
+                    video = find_here(found[0]) if found else None
+                if not give(key, track.get("title") or "", video, plex_file):
                     return result
 
         # Music videos beside the artist rather than one track.
@@ -258,12 +282,17 @@ def send_artwork(config, on_progress: Callable[[float], None] = _noop,
                                       "/library/metadata/%s/extras" % artist))
             for extra in extras.get("Metadata") or []:
                 key = str(extra.get("ratingKey") or "")
-                files = [f for f in _files(extra) if f.lower().endswith(VIDEO_EXTS)]
-                if not key or not files or key in seen:
+                every = _files(extra)
+                files = [f for f in every if f.lower().endswith(VIDEO_EXTS)]
+                if not key or not every or key in seen:
                     continue
                 seen.add(key)
                 result.videos += 1
-                if not give(key, extra.get("title") or "", find_here(files[0])):
+                if not files:
+                    result.not_mp4 += 1
+                    continue
+                if not give(key, extra.get("title") or "", find_here(files[0]),
+                            files[0]):
                     return result
     finally:
         _save_state(state_path, state)
