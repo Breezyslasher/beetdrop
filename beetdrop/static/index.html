@@ -665,6 +665,50 @@
       </div>
     </details>
 
+    <div class="jobactions">
+      <button type="button" @click="loadMissingArt" :disabled="loadingMissingArt">
+        {{ loadingMissingArt ? 'Looking...' : 'Find videos with no artwork' }}
+      </button>
+    </div>
+    <details v-if="missingArt.length" class="joblog" open>
+      <summary>{{ missingArtTotal }} music video(s) with no artwork</summary>
+      <div v-for="video in missingArt" :key="video.path" class="review">
+        <p class="review-track">
+          <strong>{{ video.name }}</strong>
+          <span class="note" v-if="video.duration"> ({{ fmtDuration(video.duration) }})</span>
+        </p>
+        <p class="note">{{ video.folder }}</p>
+        <input type="search" v-model="video.query" placeholder="artist and title"
+               @keyup.enter="searchArtFor(video)">
+        <button type="button" :disabled="video.searching" @click="searchArtFor(video)">
+          {{ video.searching ? 'Searching...' : 'Search YouTube' }}
+        </button>
+        <button v-for="c in (video.candidates || [])" :key="c.video_id"
+                type="button" class="candidate artpick"
+                :disabled="choosingArt === video.path"
+                @click="useArt(video, c)">
+          <img :src="c.thumbnail" alt="" loading="lazy" @error="hideImage">
+          <span>
+            {{ c.title }}
+            <span class="note">
+              {{ c.artist }}<template v-if="c.duration">, {{ fmtDuration(c.duration) }}<template
+                v-if="video.duration"> ({{ lengthDiff(c.duration, video.duration) }})</template></template>
+            </span>
+          </span>
+        </button>
+        <p class="note" v-if="video.candidates && !video.candidates.length">
+          Nothing came back. Try fewer words - the title alone, or the artist
+          and two or three words of it.
+        </p>
+      </div>
+      <p class="note" v-if="missingArtTotal > missingArt.length">
+        Showing the first {{ missingArt.length }} of {{ missingArtTotal }}.
+      </p>
+      <p class="note" v-if="plexLinked">
+        Pictures chosen here reach Plex with <strong>Send artwork to Plex</strong>.
+      </p>
+    </details>
+
     <template v-if="plexLinked">
       <p class="note">
         Plex does not read the artwork embedded in a music video &mdash; it

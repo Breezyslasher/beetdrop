@@ -88,6 +88,10 @@ const app = createApp({
       embeddingArt: false,
       sendingPlexArt: false,
       plexLinked: false,
+      missingArt: [],
+      missingArtTotal: 0,
+      loadingMissingArt: false,
+      choosingArt: "",
       // A Plex PIN sign-in in progress. The account token never reaches
       // the page; it only learns the code, then the servers.
       plexPin: { id: "", code: "", state: "", servers: null, busy: false, error: "" },
@@ -411,6 +415,65 @@ const app = createApp({
       } catch (err) {
         this.plexLinked = false;
       }
+    },
+
+    async loadMissingArt() {
+      this.loadingMissingArt = true;
+      try {
+        const body = await this.api("/api/videos/missing-art");
+        this.missingArt = (body.videos || []).map((v) => Object.assign(
+          {}, v, { candidates: null, searching: false }));
+        this.missingArtTotal = body.total || 0;
+        if (!this.missingArt.length) this.showToast("Every music video has artwork");
+      } catch (err) {
+        if (err.message !== "password required") {
+          this.showToast("Could not list them: " + err.message);
+        }
+      } finally {
+        this.loadingMissingArt = false;
+      }
+    },
+
+    async searchArtFor(video) {
+      if (!video.query.trim()) return;
+      video.searching = true;
+      try {
+        const body = await this.api(
+          "/api/videos/art-candidates?q=" + encodeURIComponent(video.query));
+        video.candidates = body.candidates || [];
+      } catch (err) {
+        if (err.message !== "password required") {
+          this.showToast("Search failed: " + err.message);
+        }
+      } finally {
+        video.searching = false;
+      }
+    },
+
+    async useArt(video, candidate) {
+      this.choosingArt = video.path;
+      try {
+        const body = await this.api("/api/videos/art", {
+          method: "POST",
+          body: JSON.stringify({ path: video.path, video_id: candidate.video_id }),
+        });
+        this.showToast(body.detail || "artwork embedded");
+        this.missingArt = this.missingArt.filter((v) => v.path !== video.path);
+        this.missingArtTotal = Math.max(0, this.missingArtTotal - 1);
+      } catch (err) {
+        if (err.message !== "password required") {
+          this.showToast("Could not use it: " + err.message);
+        }
+      } finally {
+        this.choosingArt = "";
+      }
+    },
+
+    lengthDiff(theirs, ours) {
+      // How far a result's length is from the file's: the same video
+      // agrees to a second or two.
+      const d = Math.round(theirs - ours);
+      return d === 0 ? "same length" : (d > 0 ? "+" : "") + d + "s";
     },
 
     async sendArtToPlex() {

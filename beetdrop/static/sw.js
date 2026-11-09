@@ -9,7 +9,7 @@
 // the old shell is gone rather than waiting to be overwritten by a
 // successful online load. A whole-UI change is exactly when an offline
 // launch must not serve the previous look.
-const CACHE = "beetdrop-shell-v43";
+const CACHE = "beetdrop-shell-v44";
 const SHELL = [
   "/",
   "/static/style.css",
@@ -42,6 +42,10 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET") return;
+  // Only Beetdrop's own files are the app shell. Pictures from elsewhere
+  // (YouTube thumbnails, cover art) go straight to the network as the
+  // page asked for them, and are not kept in the shell cache.
+  if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/api/") || url.pathname === "/events") return;
   event.respondWith(
     fetch(event.request)

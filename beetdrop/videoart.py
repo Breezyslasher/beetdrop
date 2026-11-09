@@ -769,3 +769,49 @@ def backfill_video_art(roots: Iterable[Path],
                 on_detail("could not write %s (%s)" % (video.name, _why(exc, True)))
     on_progress(100.0)
     return result
+
+
+# -- by hand ----------------------------------------------------------------
+# For the videos no rule could settle: list them, let a person search
+# YouTube and pick the right video, and embed that one's thumbnail.
+
+def list_missing_art(roots: Iterable[Path], limit: int = 50) -> tuple:
+    """([videos with no embedded artwork, up to `limit`], how many in all).
+    Each: its path, name, folder, length, and a suggested search - the
+    artist and title as the automatic search would put them."""
+    roots = list(roots)
+    found, total = [], 0
+    for video in iter_videos(roots):
+        try:
+            covered, _link = _inspect(video)
+        except Exception:
+            continue                   # WebM/MKV named .mp4, or unreadable
+        if covered:
+            continue
+        total += 1
+        if len(found) >= limit:
+            continue
+        folder = video.parent.name
+        for root in roots:
+            try:
+                folder = str(video.parent.resolve().relative_to(root.resolve()))
+                break
+            except (ValueError, OSError):
+                continue
+        try:
+            length = round(video_length(video))
+        except Exception:
+            length = 0
+        title = video_title(video) or search_query(video)
+        found.append({"path": str(video), "name": video.name, "folder": folder,
+                      "duration": length,
+                      "query": with_artist(title, video_artist(video, roots))})
+    return found, total
+
+
+def choose_art(video: Path, video_id: str, fetch_art: Optional[Callable] = None) -> None:
+    """Embed the thumbnail of the YouTube video a person chose."""
+    art = (fetch_art or fetch_thumbnail)(video_id, "")
+    if not art:
+        raise LookupError("YouTube has no thumbnail for that video")
+    embed_cover(video, art[0], art[1], mark="chosen by hand: %s" % video_id)

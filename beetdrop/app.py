@@ -90,6 +90,13 @@ class SettingsUpdate(BaseModel):
     plex_section: Optional[str] = None  # "" = automatic
 
 
+class VideoArtChoice(BaseModel):
+    """A YouTube video picked by hand as a music video's artwork. Module
+    level for the same reason as MatchChoice."""
+    path: str
+    video_id: str
+
+
 class LoginRequest(BaseModel):
     password: str
 
@@ -1142,6 +1149,64 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
                  "Library lyrics refresh" if refresh else
                  "Library lyrics scan")
         return store.update_job(job["id"], title=title) or job
+
+    def _video_in_library(raw: str) -> Path:
+        """A video path that came over HTTP, held to the library."""
+        config = effective_config()
+        video = Path(raw)
+        try:
+            resolved = video.resolve()
+            inside = any(resolved.is_relative_to(root.resolve())
+                         for root in (config.music_root, config.video_root))
+        except OSError:
+            inside = False
+        if not inside or video.suffix.lower() not in (".mp4", ".m4v"):
+            raise HTTPException(status_code=400,
+                                detail="that is not a music video in the library")
+        if not video.is_file():
+            raise HTTPException(status_code=404, detail="that video is gone")
+        return video
+
+    @app.get("/api/videos/missing-art", dependencies=[protected])
+    async def api_videos_missing_art(limit: int = 50):
+        """Music videos with no embedded artwork, to pick one by hand."""
+        from .videoart import list_missing_art
+        config = effective_config()
+        videos, total = await asyncio.to_thread(
+            list_missing_art, [config.music_root, config.video_root],
+            max(1, min(limit, 200)))
+        return {"videos": videos, "total": total}
+
+    @app.get("/api/videos/art-candidates", dependencies=[protected])
+    async def api_videos_art_candidates(q: str):
+        """YouTube videos for this text, unscored: a person is choosing."""
+        from .search import search_videos
+        if not q.strip():
+            return {"candidates": []}
+        try:
+            results = await asyncio.to_thread(search_videos, q.strip(), 12)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="YouTube: %s" % exc) from exc
+        return {"candidates": [{
+            "video_id": r.video_id, "title": r.raw_title or r.title,
+            "artist": r.artist_display, "duration": r.duration_seconds or 0,
+            # 320x180, the frame without bars - what will be embedded is
+            # the full-size one.
+            "thumbnail": "https://i.ytimg.com/vi/%s/mqdefault.jpg" % r.video_id,
+        } for r in results]}
+
+    @app.post("/api/videos/art", dependencies=[protected])
+    async def api_videos_art(body: VideoArtChoice):
+        """Embed the thumbnail of the YouTube video chosen for this one."""
+        from .videoart import choose_art
+        video = _video_in_library(body.path)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{11}", body.video_id or ""):
+            raise HTTPException(status_code=400, detail="not a YouTube video id")
+        try:
+            await asyncio.to_thread(choose_art, video, body.video_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {"ok": True, "detail": "artwork embedded in %s" % video.name}
 
     @app.post("/api/plex/send-artwork", status_code=202, dependencies=[protected])
     async def api_plex_send_artwork():
