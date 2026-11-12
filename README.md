@@ -272,6 +272,12 @@ and a look in Plex before relying on it. If Plex wants it spelled
 differently, it is one function (`plex_video_filename` in
 `companion.py`).
 
+Grabbing a song Beetdrop already grabbed, while it is still where it
+was filed with no music video beside it, offers just its music video:
+a job fetches the video beside the song, and the song is not grabbed
+again. (It knows songs by its own grab history - not ones filed as part
+of an album, or by another tool.)
+
 ## Telling Plex
 
 Plex notices new files on its own schedule - a periodic scan, or a
@@ -294,6 +300,14 @@ you own can be chosen: Plex lets only a server's owner ask it to scan,
 so a server shared with you is listed but greyed out. **Sign out of
 Plex** forgets the address and token and keeps the folder mapping. The
 address and token can still be typed in by hand.
+
+**File new grabs in** names a folder inside the music folder for new
+grabs - `explo`, say, when the music folder is mounted a level above
+several Plex libraries, so grabs land in the one they belong to.
+Everything that reads the library - lyrics scans, artwork, repairs,
+stats - still covers the whole music folder; fixing a match files a
+track back inside the library folder it was in; and the Repair page
+lists _review/ both there and at the top. (`BEETDROP_GRAB_SUBFOLDER`.)
 
 **Library to scan** lists Plex's libraries once it is connected. Left
 on *Automatic*, every library holding the music folder is scanned - a

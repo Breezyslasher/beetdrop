@@ -68,6 +68,9 @@ def apply_stored_settings(base: Config, stored: dict,
     if "plex_music_path" in stored:
         # Clearable: blank means Plex sees the library where we do.
         config.plex_music_path = stored["plex_music_path"]
+    if "grab_subfolder" in stored:
+        # Clearable: blank files grabs in the music folder itself.
+        config.grab_subfolder = stored["grab_subfolder"]
     if "plex_section" in stored:
         # Clearable: blank goes back to every library holding the folder.
         config.plex_section = stored["plex_section"]

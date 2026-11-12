@@ -41,6 +41,42 @@ from .matching import credit_ids, credit_name, select_release, select_release_fo
 AUDIO_EXTS = (".opus", ".ogg", ".mp3", ".m4a", ".flac")
 
 
+def filing_root_for(config: Config, path: Path) -> Path:
+    """Where a re-matched track is filed.
+
+    With a folder set for new grabs, the music folder holds several
+    libraries side by side ("explo", "Nick", "Both"), and a track stays in
+    the one it is in: its first folder below the music folder. A track
+    in _review, or not in such a folder, goes where new grabs go.
+    Without one, the music folder is the library, as before.
+    """
+    if not config.grab_subfolder or not str(config.grab_subfolder).strip("/ "):
+        return config.music_root
+    filing = config.filing_root
+    try:
+        path.resolve().relative_to(filing.resolve())
+        return filing
+    except (ValueError, OSError):
+        pass
+    try:
+        parts = path.resolve().relative_to(config.music_root.resolve()).parts
+    except (ValueError, OSError):
+        return filing
+    if len(parts) >= 3 and parts[0] != REVIEW_DIR:
+        return config.music_root / parts[0]
+    return filing
+
+
+def review_roots(config: Config) -> list:
+    """The folders whose _review/ hold unverified grabs: where new grabs
+    go, and the music folder itself, where they went before a folder for
+    them was set."""
+    roots = [config.filing_root]
+    if config.filing_root != config.music_root:
+        roots.append(config.music_root)
+    return roots
+
+
 def iter_unverified(root: Path):
     """Audio filed under _review/ - the grabs nothing could verify."""
     review = root / REVIEW_DIR
@@ -236,7 +272,7 @@ def apply_choice(config: Config, mb, path: Path, recording_id: str,
         return Rematch(old_path=path, new_path=path, tags=tags,
                        moved_video=video is not None)
 
-    destination = (album_dir(config.music_root, tags)
+    destination = (album_dir(filing_root_for(config, path), tags)
                    / track_filename(tags, path.suffix.lstrip(".")))
     if destination.resolve() == path.resolve():
         # Already where it belongs; just correct the tags in place.

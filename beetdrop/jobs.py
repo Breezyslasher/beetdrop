@@ -110,12 +110,17 @@ class JobManager:
             raise JobCancelled()
 
     def enqueue(self, video_id: str, fmt: str = "", bitrate: str = "",
-                kind: str = "track", with_video: bool = False) -> dict:
+                kind: str = "track", with_video: bool = False,
+                inbox_path: str = "") -> dict:
+        """Queue a job. `inbox_path` is the song a "companion" job fetches
+        the music video for - set before the job can start."""
         config = self._config_provider()
         job = self._store.create_job(
             video_id, fmt or config.output_format, bitrate or config.bitrate,
             kind=kind, with_video=with_video and kind == "track",
         )
+        if inbox_path:
+            job = self._store.update_job(job["id"], inbox_path=inbox_path) or job
         self._publish(job)
         self._executor.submit(self._run, job["id"])
         return job
@@ -125,9 +130,11 @@ class JobManager:
         if job is None:
             return None
         if job["stage"] in ("failed", "cancelled"):
+            # A companion job's inbox_path is its song, not a result.
+            keep = job["inbox_path"] if job["kind"] == "companion" else ""
             job = self._update(job_id, stage="queued", progress=0.0, error="",
                                detail="", log="", failed_tracks="",
-                               inbox_path="", inbox_state="")
+                               inbox_path=keep, inbox_state="")
             self._executor.submit(self._run, job_id)
             return job
         if (job["stage"] == "done" and job["kind"] == "album"
@@ -229,6 +236,34 @@ class JobManager:
                              detail=detail[:2000], log=collector.text()[:20000])
                 if result.added or result.upgraded or result.purged:
                     self._tell_plex(job_id, config, config.music_root)
+                return
+            if job["kind"] == "companion":
+                # Just the music video, for a song already in the library.
+                from pathlib import Path
+
+                from .backfill import read_track_meta
+                from .fulltags import FullTags
+                from .grab import GrabOutcome
+                from .search import lookup_video
+                audio = Path(job["inbox_path"] or "")
+                if not job["inbox_path"] or not audio.is_file():
+                    raise RuntimeError("the song is no longer at %s" % audio)
+                on_stage("searching")
+                result = lookup_video(job["video_id"])
+                self._update(job_id, title=result.title, artist=result.artist_display)
+                artist, title, album, _length = read_track_meta(audio) or ("", "", "", None)
+                tags = FullTags(title=title or result.title,
+                                artist=artist or result.primary_artist,
+                                album_artist=artist or result.primary_artist,
+                                album=album)
+                outcome = GrabOutcome(inbox_path=audio, result=result,
+                                      verified=True, tags=tags)
+                detail = self._companion(job_id, config, outcome, on_stage,
+                                         on_progress, collector)
+                self._update(job_id, stage="done", progress=100.0,
+                             detail=detail[:2000], log=collector.text()[:20000],
+                             inbox_state="filed")
+                self._tell_plex(job_id, config, audio.parent)
                 return
             if job["kind"] == "plexart":
                 # Plex draws music video thumbnails from a frame and does

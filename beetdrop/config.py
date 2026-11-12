@@ -91,6 +91,18 @@ class Config:
     # The library to scan, by Plex's key. Blank: every library holding
     # the folder.
     plex_section: str = field(default_factory=lambda: _env("PLEX_SECTION", ""))
+    # A folder inside the music folder that new grabs are filed in -
+    # "explo", say, when the music folder is mounted a level above several
+    # libraries. Blank: the music folder itself. Everything that reads the
+    # library (scans, repairs, stats) still covers the whole music folder.
+    grab_subfolder: str = field(default_factory=lambda: _env("GRAB_SUBFOLDER", ""))
+
+    @property
+    def filing_root(self) -> Path:
+        """Where new grabs are filed: the music folder, or the folder
+        inside it that Settings names."""
+        sub = clean_subfolder(self.grab_subfolder)
+        return self.music_root / sub if sub else self.music_root
 
     def __post_init__(self):
         # A blank video_root lives beside the music library so a single
@@ -150,3 +162,13 @@ def check_storage(root: Path, min_free_mb: int = 0) -> None:
     problem = storage_problem(root, min_free_mb)
     if problem:
         raise InboxError(problem)
+
+
+def clean_subfolder(text: str) -> str:
+    """A folder path inside the music folder, or "" - never one that
+    climbs out of it or starts at the top of the disk."""
+    parts = [p for p in (text or "").replace("\\", "/").split("/")
+             if p not in ("", ".")]
+    if any(p == ".." for p in parts):
+        return ""
+    return "/".join(parts)

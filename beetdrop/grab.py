@@ -122,7 +122,7 @@ def _finish_into_library(config: Config, audio_path: Path, tags: FullTags,
     with a synced-lyrics sidecar when available."""
     cover_bytes, cover_mime = (cover[0], cover[1]) if cover else (None, "image/jpeg")
     write_full_tags(audio_path, tags, cover_bytes, cover_mime)
-    directory = album_dir(config.music_root, tags)
+    directory = album_dir(config.filing_root, tags)
     final = place_file(audio_path, directory / track_filename(
         tags, audio_path.suffix.lstrip(".")))
     if cover_bytes and not tags.unverified:
@@ -381,7 +381,7 @@ def run_album_grab(
             album_artist=album_artist, album=lookup.album.title,
             date=lookup.album.year, unverified=True)
         cover = mb.fetch_cover(thumbnail_url=lookup.album.thumbnail_url)
-    library_dir = album_dir(config.music_root, album_level)
+    library_dir = album_dir(config.filing_root, album_level)
 
     try:
         on_stage("downloading")
