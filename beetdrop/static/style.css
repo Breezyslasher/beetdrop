@@ -965,3 +965,10 @@ textarea { padding: 10px 12px; resize: vertical; font-size: 13px; }
 .artnow { display: flex; gap: 10px; align-items: center; margin: 6px 0; }
 .artnow img { width: 128px; aspect-ratio: 16 / 9; object-fit: cover;
   border-radius: 6px; flex: none; background: var(--panel); }
+
+/* The phone's tab bar has room for five; Repair, the sixth, is reached
+   from a link at the top of Library and Settings - shown only there. */
+.mobileonly { display: none; }
+.layout-mobile .mobileonly { display: flex; }
+.repairlink { width: 100%; align-items: center; gap: 8px; justify-content: flex-start;
+  min-height: var(--tap); margin-bottom: 12px; }

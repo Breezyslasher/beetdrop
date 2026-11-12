@@ -157,9 +157,9 @@ const app = createApp({
       ];
     },
     tabItems() {
-      // Repair is absent by design: it is reached from Library and from a
-      // job card, and five items is what fits a phone without shrinking
-      // the tap targets.
+      // Repair is absent by design: five items is what fits a phone
+      // without shrinking the tap targets. It is reached from a link at
+      // the top of Library and Settings (.mobileonly), and from a job card.
       return [
         { view: "search", label: "Search", icon: ICONS.search },
         { view: "queue", label: "Queue", icon: ICONS.queue },

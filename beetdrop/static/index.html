@@ -252,6 +252,11 @@
 
   <!-- Library ----------------------------------------------------------- -->
   <section v-show="view === 'library'">
+    <button type="button" class="mobileonly repairlink" @click="goTo('repair')">
+      <svg class="btnicon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor"
+           aria-hidden="true"><path :d="icons.repair"></path></svg>
+      Repair &mdash; fix matches, lyrics passes, music video artwork
+    </button>
     <p v-if="!loadingLibrary && !libraryItems.length" class="hint">
       Nothing here yet. Grab something, or point the library path at your
       music in Settings.
@@ -840,6 +845,11 @@
 
   <!-- Settings ---------------------------------------------------------- -->
   <section v-show="view === 'settings'" class="settingspage">
+    <button type="button" class="mobileonly repairlink" @click="goTo('repair')">
+      <svg class="btnicon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor"
+           aria-hidden="true"><path :d="icons.repair"></path></svg>
+      Repair &mdash; fix matches, lyrics passes, music video artwork
+    </button>
 
     <h3>Library &amp; paths</h3>
 
