@@ -42,7 +42,7 @@ SETTING_KEYS = ("output_format", "bitrate", "password", "concurrency",
                 "apple_token", "apple_storefront", "word_lyrics",
                 "plex_url", "plex_token", "plex_music_path", "plex_client_id",
                 "plex_section", "companion_names_v2",
-                "companion_names_v3")
+                "companion_names_v3", "grab_subfolder")
 
 
 class Store:

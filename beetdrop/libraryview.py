@@ -168,7 +168,8 @@ def scan_albums(root: Path) -> list:
         except ValueError:
             continue
         parts = relative.parts
-        in_review = bool(parts) and parts[0] == REVIEW_DIR
+        # _review/ at the top, or inside the folder new grabs go to.
+        in_review = REVIEW_DIR in parts[:2]
         album_name, year = _split_year(folder.name)
         artist = folder.parent.name if len(parts) > 1 else ""
         if in_review:

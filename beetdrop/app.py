@@ -88,6 +88,7 @@ class SettingsUpdate(BaseModel):
     plex_token: Optional[str] = None  # "" clears; never sent back
     plex_music_path: Optional[str] = None
     plex_section: Optional[str] = None  # "" = automatic
+    grab_subfolder: Optional[str] = None  # "" = the music folder itself
 
 
 class VideoArtChoice(BaseModel):
@@ -329,13 +330,20 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             duplicate = store.find_duplicate(video_id, body.kind)
             if duplicate is not None:
                 active = duplicate["stage"] not in ("done",)
-                raise HTTPException(status_code=409, detail={
+                detail = {
                     "message": ("this %s is already being grabbed" % body.kind)
                                if active else
                                ("this %s was already grabbed" % body.kind),
                     "existing_job": {k: duplicate[k] for k in
                                      ("id", "title", "artist", "stage", "created_at")},
-                })
+                }
+                song = _song_in_library(duplicate)
+                if song is not None:
+                    # Still where it was filed: the page can offer just its
+                    # music video rather than the whole song again.
+                    detail["in_library"] = True
+                    detail["has_video"] = _has_video(song)
+                raise HTTPException(status_code=409, detail=detail)
         if body.with_video and body.kind != "track":
             # An album would mean a search per track, and most album
             # tracks have no video - the closest match would be wrong
@@ -345,6 +353,47 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
         job = manager.enqueue(video_id, body.format, body.bitrate, kind=body.kind,
                               with_video=body.with_video)
         return job
+
+    def _song_in_library(job: dict) -> Optional[Path]:
+        """The file a finished song grab left in the library, if it is
+        still there."""
+        if job.get("kind") != "track" or job.get("stage") != "done":
+            return None
+        path = Path(job.get("inbox_path") or "")
+        if not job.get("inbox_path") or not path.is_file():
+            return None
+        try:
+            path.resolve().relative_to(effective_config().music_root.resolve())
+        except (ValueError, OSError):
+            return None
+        return path
+
+    def _has_video(song: Path) -> bool:
+        from .companion import PLEX_VIDEO_SUFFIX, companion_path
+        return (companion_path(song).is_file()
+                or song.with_name(song.stem + PLEX_VIDEO_SUFFIX + ".mp4").is_file())
+
+    @app.post("/api/jobs/{job_id}/video", status_code=202, dependencies=[protected])
+    async def api_job_video(job_id: str):
+        """Fetch just the music video for a song a past grab filed - the
+        song is not grabbed again."""
+        job = store.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="no such job")
+        song = _song_in_library(job)
+        if song is None:
+            raise HTTPException(status_code=409,
+                                detail="that song is no longer where it was filed")
+        if _has_video(song):
+            raise HTTPException(status_code=409,
+                                detail="that song already has a music video beside it")
+        running = store.find_duplicate(job["video_id"], "companion")
+        if running is not None and running["stage"] not in ("done", "failed", "cancelled"):
+            raise HTTPException(status_code=409,
+                                detail="its music video is already being fetched")
+        queued = manager.enqueue(job["video_id"], kind="companion", inbox_path=str(song))
+        return store.update_job(queued["id"], title=job.get("title") or "",
+                                artist=job.get("artist") or "") or queued
 
     @app.get("/api/jobs", dependencies=[protected])
     async def api_jobs(limit: int = 50):
@@ -386,6 +435,7 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             "plex_token_set": bool(config.plex_token),
             "plex_music_path": config.plex_music_path,
             "plex_section": config.plex_section,
+            "grab_subfolder": config.grab_subfolder,
             "apple_storefront": config.apple_storefront,
             "word_lyrics": config.word_lyrics,
             "video_root": str(config.video_root),
@@ -446,6 +496,15 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             updates["plex_music_path"] = body.plex_music_path.strip()
         if body.plex_section is not None:
             updates["plex_section"] = body.plex_section.strip()
+        if body.grab_subfolder is not None:
+            from .config import clean_subfolder
+            cleaned = clean_subfolder(body.grab_subfolder)
+            if body.grab_subfolder.strip() and not cleaned:
+                raise HTTPException(
+                    status_code=422,
+                    detail="the folder for new grabs must be a folder inside the "
+                           "music folder, e.g. explo")
+            updates["grab_subfolder"] = cleaned
         if "lyrics" in updates:
             updates["lyrics"] = "1" if updates["lyrics"] else "0"
         if body.musixmatch_token is not None:
@@ -990,7 +1049,9 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
 
         def collect():
             found, seen = [], 0
-            for path in iter_unverified(config.music_root):
+            from .rematch import review_roots
+            paths = [p for root in review_roots(config) for p in iter_unverified(root)]
+            for path in paths:
                 seen += 1
                 if len(found) >= max(1, min(limit, 500)):
                     continue

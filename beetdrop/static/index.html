@@ -218,7 +218,8 @@
         <span class="stage" :class="'stage-' + j.stage">{{ j.stage }}</span>
       </div>
       <div class="job-line job-sub">
-        <span v-if="j.artist" class="job-artist">{{ j.artist }}<template v-if="j.kind === 'album'"> &middot; album</template></span>
+        <span v-if="j.artist" class="job-artist">{{ j.artist }}<template v-if="j.kind === 'album'"> &middot; album</template><template
+          v-if="j.kind === 'companion'"> &middot; music video only</template></span>
         <span v-if="j.stage === 'downloading'" class="pct">{{ Math.round(j.progress) }}%</span>
       </div>
       <p v-if="j.detail" class="job-detail">{{ j.detail }}</p>
@@ -856,6 +857,16 @@
     <p class="note" v-if="settings && settings.music_root_locked">
       Library: <code>{{ settings.music_root }}</code> (set by the
       container mount; change the volume in your compose file, not here).
+    </p>
+    <label>File new grabs in <span class="note">(optional)</span>
+      <input v-model="draft.grab_subfolder" type="text" spellcheck="false"
+             autocomplete="off" placeholder="a folder inside the library, e.g. explo">
+    </label>
+    <p class="note" v-if="settings" style="overflow-wrap:anywhere">
+      New grabs go to
+      <code>{{ settings.music_root }}{{ (draft.grab_subfolder || '').trim() ? '/' + draft.grab_subfolder.trim().replace(/^\/+|\/+$/g, '') : '' }}/Artist/Album</code>.
+      For a library mounted a level above several Plex libraries: name the one
+      grabs belong in. Scans, repairs and stats still cover the whole library.
     </p>
     <details class="explain">
       <summary>What happens to a grab?</summary>

@@ -750,6 +750,14 @@ const app = createApp({
         delete this.grabbing[id];
         if (err.status === 409 && err.detail && err.detail.existing_job) {
           const existing = err.detail.existing_job;
+          if (err.detail.in_library && !err.detail.has_video && kind === "track") {
+            // In the library already, without its video: offer just that.
+            if (window.confirm((existing.title || "This song") + " is already in your "
+                + "library, with no music video beside it.\n\nGet its music video?")) {
+              this.grabVideoFor(existing);
+              return;
+            }
+          }
           const when = new Date(existing.created_at * 1000).toLocaleString();
           if (window.confirm(err.detail.message + "\n(" +
               (existing.title || existing.id) + ", " + existing.stage + ", " + when +
@@ -759,6 +767,17 @@ const app = createApp({
           return;
         }
         if (err.message !== "password required") this.showToast("Grab failed: " + err.message);
+      }
+    },
+
+    async grabVideoFor(existing) {
+      try {
+        await this.api("/api/jobs/" + existing.id + "/video", { method: "POST" });
+        this.showToast("Queued: the music video for " + (existing.title || "it"));
+      } catch (err) {
+        if (err.message !== "password required") {
+          this.showToast("Could not queue it: " + err.message);
+        }
       }
     },
 
@@ -840,6 +859,7 @@ const app = createApp({
         this.settings = await this.api("/api/settings");
         this.draft = {
           music_root: this.settings.music_root,
+          grab_subfolder: this.settings.grab_subfolder || "",
           output_format: this.settings.output_format,
           bitrate: this.settings.bitrate,
           concurrency: this.settings.concurrency,
@@ -883,6 +903,7 @@ const app = createApp({
         plex_url: (this.draft.plex_url || "").trim(),
         plex_music_path: (this.draft.plex_music_path || "").trim(),
         plex_section: this.draft.plex_section || "",
+        grab_subfolder: (this.draft.grab_subfolder || "").trim(),
       };
       // Only send the library paths when they are editable (not env-locked).
       if (this.settings && !this.settings.music_root_locked) {
