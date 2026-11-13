@@ -367,7 +367,7 @@ class TestTheEndpoints:
         config = self._config(tmp_path)
         with TestClient(create_app(config)) as client:
             assert client.get("/api/match/candidates?title=%20").json() == {
-                "candidates": []}
+                "candidates": [], "note": ""}
 
     def test_a_path_outside_the_library_is_refused(self, tmp_path):
         # The path arrives over HTTP, so it is held to the library.
@@ -536,3 +536,77 @@ class TestCandidateCoverArt:
                   / "app.js").read_text()
         assert 'error="hideImage"' in page
         assert "hideImage(event)" in source
+
+
+
+class StepMB(FakeMB):
+    """MusicBrainz that finds the recording only one way: by `exact`
+    phrases with or without an album, or only by words."""
+
+    def __init__(self, finds, **kwargs):
+        super().__init__(recordings=[ON_TWO], **kwargs)
+        self.finds = finds          # set of ("exact"|"words", with_album: bool)
+        self.asked = []
+
+    def search_recordings(self, title, artist, limit=10, album=""):
+        self.asked.append(("exact", bool(album)))
+        return self.recordings if ("exact", bool(album)) in self.finds else []
+
+    def search_recordings_loose(self, title, artist, limit=10, album=""):
+        self.asked.append(("words", bool(album)))
+        return self.recordings if ("words", bool(album)) in self.finds else []
+
+
+class TestBroadeningTheSearch:
+    """A real search - "Kyle Gordon - We Are the Zorg", on "Kyle Gordon Is
+    Everywhere" - found nothing, while Plex matched it fine."""
+
+    def test_an_exact_hit_is_not_broadened(self):
+        from beetdrop.rematch import find_candidates
+        mb = StepMB({("exact", True)})
+        found, note = find_candidates(mb, "9 to 5", "Dolly Parton", album="Greatest Hits")
+        assert found and note == "" and mb.asked == [("exact", True)]
+
+    def test_without_the_album_next(self):
+        from beetdrop.rematch import find_candidates
+        mb = StepMB({("exact", False)})
+        found, note = find_candidates(mb, "9 to 5", "Dolly Parton", album="Greatest Hitz")
+        assert found and "any album" in note
+        assert mb.asked == [("exact", True), ("exact", False)]
+
+    def test_then_word_by_word(self):
+        from beetdrop.rematch import find_candidates
+        mb = StepMB({("words", False)})
+        found, note = find_candidates(mb, "We Are the Zorg", "Kyle Gordon",
+                                      album="Kyle Gordon Is Everywhere")
+        assert found and "closest" in note
+        assert mb.asked == [("exact", True), ("exact", False), ("words", True), ("words", False)]
+
+    def test_nothing_anywhere_is_nothing(self):
+        from beetdrop.rematch import find_candidates
+        assert find_candidates(StepMB(set()), "Song", "Nobody") == ([], "")
+
+    def test_a_pick_from_a_looser_search_is_found_again(self, tmp_path):
+        if not have_ffmpeg():
+            pytest.skip("ffmpeg unavailable")
+        music = tmp_path / "music"
+        track = music / "_review" / "Kyle Gordon - We Are the Zorg" / "track.opus"
+        make_opus(track)
+        config = Config(music_root=music, scratch_root=tmp_path / "s", config_dir=tmp_path / "c")
+        mb = StepMB({("words", False)}, releases={"rel-hits": HITS_RELEASE})
+        outcome = apply_choice(config, mb, track, "rec-1", "9 to 5", "Dolly Parton")
+        assert outcome.tags.recording_mbid == "rec-1"
+
+    def test_the_word_search_asks_musicbrainz_by_words(self, tmp_path, monkeypatch):
+        from urllib.parse import unquote
+
+        from beetdrop.mb import MusicBrainzClient
+        client = MusicBrainzClient(tmp_path / "mb.sqlite3")
+        urls = []
+        monkeypatch.setattr(client, "_cached_get",
+                            lambda url: urls.append(unquote(url)) or {"recordings": []})
+        client.search_recordings_loose("We Are the Zorg (feat. Billy)", "Kyle Gordon",
+                                       album="Kyle Gordon Is Everywhere")
+        client.close()
+        assert ('recording:(We Are the Zorg \\(feat. Billy\\)) AND artist:(Kyle Gordon) '
+                'AND release:(Kyle Gordon Is Everywhere)') in urls[0]

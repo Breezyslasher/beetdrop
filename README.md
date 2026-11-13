@@ -363,6 +363,13 @@ Beetdrop would pick (it prefers the original studio release). A name
 with bracketed extras still matches, so "Rumours" finds "Rumours
 (Deluxe Edition)". If MusicBrainz spells the album differently, leave it
 out.
+
+When the exact search finds nothing, Fix match loosens it a step at a
+time - without the album, then word by word, ranked by MusicBrainz - and
+says when it did; automatic matching during a grab falls back to the
+word search too, its usual checks still applied. MusicBrainz is run by
+volunteers and newer releases can be missing outright; Plex matches
+against its own catalogue, which is why it can find songs this cannot.
 Tracks only for now; albums are a bigger job.
 
 ## Lyrics on their own

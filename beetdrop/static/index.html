@@ -601,6 +601,9 @@
           <input type="checkbox" v-model="track.move">
           move the file to match the new tags
         </label>
+        <p class="note" v-if="track.searchNote && track.candidates && track.candidates.length">
+          {{ track.searchNote }}
+        </p>
         <button v-for="c in (track.candidates || [])" :key="c.id"
                 type="button" class="candidate"
                 :disabled="fixingMatch === track.path"
@@ -615,8 +618,10 @@
           </span>
         </button>
         <p class="note" v-if="track.candidates && !track.candidates.length">
-          Nothing found. Try just the song title, or check the artist -
-          or leave the album out, in case MusicBrainz spells it differently.
+          MusicBrainz has nothing like it, even searching word by word. It
+          may not have this song yet - it is run by volunteers, and newer
+          releases can be missing. Plex matches against its own catalogue,
+          which is why it can find songs this cannot.
         </p>
       </div>
       <p class="note" v-if="unverifiedTotal > unverified.length">

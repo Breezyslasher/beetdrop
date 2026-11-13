@@ -92,6 +92,13 @@ def resolve_track(mb, title: str, artist: str,
     """Match one candidate to a MusicBrainz recording and pick which
     release it files under."""
     recordings = mb.search_recordings(title, artist)
+    loose = getattr(mb, "search_recordings_loose", None)
+    if not recordings and loose is not None:
+        # Nothing by exact phrase - a "feat.", punctuation, an edition
+        # spelled differently there. The words, ranked by MusicBrainz, go
+        # through the same checks (best_recording), so a looser search
+        # finds more without accepting less.
+        recordings = loose(title, artist)
     recording, _score = best_recording(title, artist, duration_seconds, recordings)
     if recording is None:
         return TrackResolution(

@@ -147,6 +147,26 @@ class MusicBrainzClient:
             MB_ROOT, quote(query), limit)
         return self._cached_get(url).get("recordings", [])
 
+    def search_recordings_loose(self, title: str, artist: str, limit: int = 10,
+                                album: str = "") -> list[dict]:
+        """search_recordings by words rather than exact phrases: each field
+        matches on any of its words, and MusicBrainz ranks the results by
+        how many and how well. For a title or album spelled a little
+        differently there - punctuation, a "feat.", an edition - where the
+        phrase search finds nothing at all."""
+        def words(text: str) -> str:
+            return " ".join(_lucene_escape(w) for w in text.split())
+
+        parts = ["recording:(%s)" % words(title)]
+        if artist.strip():
+            parts.append("artist:(%s)" % words(artist))
+        if album.strip():
+            parts.append("release:(%s)" % words(album))
+        query = " AND ".join(parts)
+        url = "%s/recording?query=%s&limit=%d&fmt=json" % (
+            MB_ROOT, quote(query), limit)
+        return self._cached_get(url).get("recordings", [])
+
     def search_releases(self, album: str, artist: str, limit: int = 10) -> list[dict]:
         query = 'release:"%s" AND artist:"%s"' % (
             _lucene_escape(album), _lucene_escape(artist))

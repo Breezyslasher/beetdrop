@@ -1101,18 +1101,19 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
         applying them again here would hide the right one.
         """
         from .grab import get_mb_client
-        from .rematch import search_candidates
+        from .rematch import find_candidates
 
         if not title.strip():
-            return {"candidates": []}
+            return {"candidates": [], "note": ""}
         config = effective_config()
 
         def run():
-            return search_candidates(get_mb_client(config), title, artist,
-                                     limit=max(1, min(limit, 25)), album=album)
+            return find_candidates(get_mb_client(config), title, artist,
+                                   limit=max(1, min(limit, 25)), album=album)
 
         try:
-            return {"candidates": await asyncio.to_thread(run)}
+            candidates, note = await asyncio.to_thread(run)
+            return {"candidates": candidates, "note": note}
         except Exception as exc:
             raise HTTPException(status_code=502,
                                 detail="MusicBrainz: %s" % exc) from exc

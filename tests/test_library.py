@@ -246,3 +246,37 @@ class TestSingleGrabResolves:
         assert outcome.verified
         # The FIRST artist is what matching received, not the joined list.
         assert captured["artist"] == "First"
+
+
+class TestMatchingByWordsWhenPhrasesFindNothing:
+    def test_the_word_search_is_tried_and_still_checked(self):
+        from beetdrop.library import resolve_track
+        recording = {
+            "id": "rec-z", "title": "We Are the Zorg", "length": 176000,
+            "artist-credit": [{"name": "Kyle Gordon", "joinphrase": " feat. "},
+                              {"name": "Billy Mainframe"}],
+            "releases": [],
+        }
+        asked = []
+
+        class MB:
+            def search_recordings(self, title, artist, limit=10):
+                asked.append("exact")
+                return []
+
+            def search_recordings_loose(self, title, artist, limit=10):
+                asked.append("words")
+                return [recording]
+
+        found = resolve_track(MB(), "We Are the Zorg (feat. Billy Mainframe)",
+                              "Kyle Gordon", 176)
+        assert asked == ["exact", "words"]
+        assert found.matched and found.tags.recording_mbid == "rec-z"
+        # A word hit that fails the checks is still refused.
+        wrong = dict(recording, title="Something Else Entirely", length=400000)
+
+        class Wrong(MB):
+            def search_recordings_loose(self, title, artist, limit=10):
+                return [wrong]
+
+        assert not resolve_track(Wrong(), "We Are the Zorg", "Kyle Gordon", 176).matched
