@@ -106,7 +106,9 @@ clean library never gets polluted silently. The queue shows which
 outcome each grab had.
 
 MusicBrainz calls are rate limited to one per second process-wide and
-cached in SQLite for 30 days. Honest caveat: there is no acoustic
+cached in SQLite for 30 days - except a search that found nothing,
+which is asked again after an hour, since music is added to MusicBrainz
+all the time. Honest caveat: there is no acoustic
 fingerprinting, so a wrong-video grab (a cover, a re-upload) can only
 be caught by duration and text similarity - watch the duration on the
 cards and the _review folder.
@@ -370,6 +372,12 @@ says when it did; automatic matching during a grab falls back to the
 word search too, its usual checks still applied. MusicBrainz is run by
 volunteers and newer releases can be missing outright; Plex matches
 against its own catalogue, which is why it can find songs this cannot.
+
+If you can find it on musicbrainz.org but the search cannot (its search
+index can lag behind a newly added release), paste the page's link into
+the song title box instead. A release (album) link lists every track on
+it to pick from, and the track is filed under exactly that release; a
+recording link gives that one recording. Nothing is searched.
 Tracks only for now; albums are a bigger job.
 
 ## Lyrics on their own

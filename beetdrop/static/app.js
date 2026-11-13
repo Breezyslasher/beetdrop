@@ -1267,6 +1267,7 @@ const app = createApp({
             path: track.path, recording_id: candidate.id,
             title: track.query, artist: track.queryArtist,
             album: track.queryAlbum || "", move: track.move,
+            release_id: candidate.release_id || "",
           }),
         });
         this.showToast(body.detail || "filed");

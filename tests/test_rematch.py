@@ -610,3 +610,195 @@ class TestBroadeningTheSearch:
         client.close()
         assert ('recording:(We Are the Zorg \\(feat. Billy\\)) AND artist:(Kyle Gordon) '
                 'AND release:(Kyle Gordon Is Everywhere)') in urls[0]
+
+
+ZORG_RELEASE_ID = "1b2c3d4e-0000-4000-8000-00000000abcd"
+ZORG_RECORDING_ID = "9a8b7c6d-0000-4000-8000-00000000beef"
+ZORG_RELEASE = {
+    "id": ZORG_RELEASE_ID, "title": "Kyle Gordon Is Everywhere", "date": "2024-08-09",
+    "release-group": {"id": "rg-zorg"},
+    "artist-credit": [{"name": "Kyle Gordon", "artist": {"id": "art-kg", "name": "Kyle Gordon"}}],
+    "media": [{"position": 1, "track-count": 2, "tracks": [
+        {"position": 1, "title": "Intro", "length": 60000,
+         "recording": {"id": "rec-intro", "title": "Intro"}},
+        {"position": 2, "title": "We Are the Zorg", "length": 201000,
+         "recording": {"id": ZORG_RECORDING_ID, "title": "We Are the Zorg"}},
+    ]}],
+}
+ZORG_RECORDING = {
+    "id": ZORG_RECORDING_ID, "title": "We Are the Zorg", "length": 201000,
+    "artist-credit": [{"name": "Kyle Gordon", "artist": {"id": "art-kg", "name": "Kyle Gordon"}}],
+    "releases": [dict(ZORG_RELEASE, media=[])],
+}
+
+
+class LinkMB(FakeMB):
+    """MusicBrainz whose search finds nothing - its index has not caught up
+    - while the pages themselves are there."""
+
+    def __init__(self):
+        super().__init__(recordings=[], release=ZORG_RELEASE)
+        self.looked_up = []
+
+    def search_recordings_loose(self, title, artist, limit=10, album=""):
+        self.searches.append((title, artist))
+        return []
+
+    def get_release(self, mbid):
+        self.looked_up.append(("release", mbid))
+        return ZORG_RELEASE if mbid == ZORG_RELEASE_ID else {}
+
+    def get_recording(self, mbid):
+        self.looked_up.append(("recording", mbid))
+        return ZORG_RECORDING if mbid == ZORG_RECORDING_ID else {}
+
+
+class TestPastingAMusicBrainzLink:
+    """"I checked and the album was on MusicBrainz" - and still Fix match
+    found nothing. A link to the page skips the search."""
+
+    def test_links_are_recognised(self):
+        from beetdrop.rematch import mb_link
+        assert mb_link("https://musicbrainz.org/release/%s" % ZORG_RELEASE_ID) == \
+            ("release", ZORG_RELEASE_ID)
+        assert mb_link(" musicbrainz.org/recording/%s?tab=x " % ZORG_RECORDING_ID.upper()) == \
+            ("recording", ZORG_RECORDING_ID)
+        assert mb_link("We Are the Zorg") is None
+        assert mb_link("https://musicbrainz.org/artist/%s" % ZORG_RELEASE_ID) is None
+
+    def test_a_release_link_lists_its_tracks(self):
+        from beetdrop.rematch import find_candidates
+        mb = LinkMB()
+        rows, note = find_candidates(
+            mb, "https://musicbrainz.org/release/%s" % ZORG_RELEASE_ID, "Kyle Gordon")
+        assert [r["title"] for r in rows] == ["Intro", "We Are the Zorg"]
+        assert all(r["release_id"] == ZORG_RELEASE_ID for r in rows)
+        assert rows[1]["album"] == "Kyle Gordon Is Everywhere" and rows[1]["year"] == "2024"
+        assert rows[1]["duration"] == 201 and rows[1]["position"] == "2"
+        assert "Kyle Gordon Is Everywhere" in note
+        assert mb.searches == []                 # nothing searched
+
+    def test_a_recording_link_gives_that_recording(self):
+        from beetdrop.rematch import find_candidates
+        mb = LinkMB()
+        rows, _note = find_candidates(
+            mb, "https://musicbrainz.org/recording/%s" % ZORG_RECORDING_ID, "")
+        assert [r["id"] for r in rows] == [ZORG_RECORDING_ID]
+        assert mb.searches == []
+
+    def test_a_link_to_nothing_finds_nothing(self):
+        from beetdrop.rematch import find_candidates
+        rows, _ = find_candidates(
+            LinkMB(), "https://musicbrainz.org/recording/%s" % ZORG_RELEASE_ID, "")
+        assert rows == []
+
+    @pytest.mark.skipif(not have_ffmpeg(), reason="needs ffmpeg")
+    def test_a_track_picked_from_a_release_is_filed_under_it(self, tmp_path):
+        config = TestApplyingAChoice()._library(tmp_path)
+        track = TestApplyingAChoice()._unverified(config, "Kyle Gordon - We Are the Zorg")
+        link = "https://musicbrainz.org/release/%s" % ZORG_RELEASE_ID
+        mb = LinkMB()
+        outcome = apply_choice(config, mb, track, ZORG_RECORDING_ID, link, "Kyle Gordon",
+                               release_id=ZORG_RELEASE_ID)
+        assert outcome.new_path == (config.music_root / "Kyle Gordon"
+                                    / "Kyle Gordon Is Everywhere (2024)"
+                                    / "02 - We Are the Zorg.opus")
+        assert outcome.tags.release_mbid == ZORG_RELEASE_ID
+        assert outcome.tags.track_number == 2 and outcome.tags.track_total == 2
+        assert mb.searches == []
+
+    @pytest.mark.skipif(not have_ffmpeg(), reason="needs ffmpeg")
+    def test_a_recording_link_pick_is_looked_up_by_id(self, tmp_path):
+        config = TestApplyingAChoice()._library(tmp_path)
+        track = TestApplyingAChoice()._unverified(config, "Kyle Gordon - We Are the Zorg")
+        link = "https://musicbrainz.org/recording/%s" % ZORG_RECORDING_ID
+        mb = LinkMB()
+        outcome = apply_choice(config, mb, track, ZORG_RECORDING_ID, link, "")
+        assert outcome.tags.title == "We Are the Zorg"
+        assert outcome.tags.album == "Kyle Gordon Is Everywhere"
+        assert mb.searches == []
+
+    @pytest.mark.skipif(not have_ffmpeg(), reason="needs ffmpeg")
+    def test_a_recording_on_another_release_is_refused(self, tmp_path):
+        config = TestApplyingAChoice()._library(tmp_path)
+        track = TestApplyingAChoice()._unverified(config)
+        with pytest.raises(LookupError):
+            apply_choice(config, LinkMB(), track, "rec-not-there", "x", "",
+                         release_id=ZORG_RELEASE_ID)
+        assert track.is_file()
+
+    @pytest.mark.skipif(not have_ffmpeg(), reason="needs ffmpeg")
+    def test_the_endpoint_passes_the_release_on(self, tmp_path, monkeypatch):
+        config = TestApplyingAChoice()._library(tmp_path)
+        track = TestApplyingAChoice()._unverified(config, "Kyle Gordon - We Are the Zorg")
+        mb = LinkMB()
+        monkeypatch.setattr("beetdrop.grab.get_mb_client", lambda c: mb)
+        link = "https://musicbrainz.org/release/%s" % ZORG_RELEASE_ID
+        with TestClient(create_app(config)) as client:
+            listed = client.get("/api/match/candidates",
+                                params={"title": link, "artist": ""}).json()
+            pick = listed["candidates"][1]
+            body = client.post("/api/match/apply", json={
+                "path": str(track), "recording_id": pick["id"], "title": link,
+                "artist": "", "release_id": pick["release_id"]}).json()
+        assert body["ok"] and body["path"].endswith("02 - We Are the Zorg.opus")
+
+
+class TestForgettingEmptyAnswersSooner:
+    """An empty answer is asked again after an hour; a real one is kept."""
+
+    def make(self, tmp_path, monkeypatch, answers):
+        import beetdrop.mb as mb_module
+
+        calls = []
+
+        class Response:
+            status_code = 200
+            ok = True
+            headers = {}
+
+            def __init__(self, data):
+                self.data = data
+
+            def json(self):
+                return self.data
+
+        def fake_get(url, **kwargs):
+            calls.append(url)
+            return Response(answers.pop(0))
+
+        monkeypatch.setattr(mb_module.requests, "get", fake_get)
+        monkeypatch.setattr(mb_module, "MIN_INTERVAL", 0)
+        client = mb_module.MusicBrainzClient(tmp_path / "cache.db")
+        client._next_ok = 0
+        return mb_module, client, calls
+
+    def test_nothing_found_is_asked_again_after_an_hour(self, tmp_path, monkeypatch):
+        mb_module, client, calls = self.make(
+            tmp_path, monkeypatch, [{"recordings": []}, {"recordings": [{"id": "r"}]}])
+        clock = [1_000_000.0]
+        monkeypatch.setattr(mb_module.time, "time", lambda: clock[0])
+        assert client.search_recordings("Zorg", "Kyle Gordon") == []
+        clock[0] += 600
+        assert client.search_recordings("Zorg", "Kyle Gordon") == []
+        assert len(calls) == 1                       # still remembered
+        clock[0] += 3600
+        assert client.search_recordings("Zorg", "Kyle Gordon") == [{"id": "r"}]
+        assert len(calls) == 2
+
+    def test_something_found_is_kept_a_month(self, tmp_path, monkeypatch):
+        mb_module, client, calls = self.make(
+            tmp_path, monkeypatch, [{"recordings": [{"id": "r"}]}])
+        clock = [1_000_000.0]
+        monkeypatch.setattr(mb_module.time, "time", lambda: clock[0])
+        client.search_recordings("Zorg", "Kyle Gordon")
+        clock[0] += 7 * 24 * 3600
+        assert client.search_recordings("Zorg", "Kyle Gordon") == [{"id": "r"}]
+        assert len(calls) == 1
+
+    def test_a_looked_up_page_is_not_mistaken_for_an_empty_search(self):
+        from beetdrop.mb import _found_nothing
+        assert _found_nothing({"recordings": []})
+        assert _found_nothing({"releases": [], "count": 0})
+        assert not _found_nothing({"id": "x", "releases": []})   # a recording with none
+        assert not _found_nothing({"recordings": [{"id": "r"}]})
