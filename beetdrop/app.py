@@ -133,6 +133,7 @@ class MatchChoice(BaseModel):
     # Picked from a release's track list (a pasted MusicBrainz release
     # link): filed under exactly that release.
     release_id: str = ""
+    position: str = ""   # which track of it, when a recording is on it twice
     # A wrong match means a wrong folder too, since the path was built
     # from the same tags - so the file moves by default. False re-tags it
     # where it stands, for a library whose layout is not Beetdrop's.
@@ -1142,7 +1143,8 @@ def create_app(base_config: Optional[Config] = None) -> FastAPI:
             return apply_choice(config, get_mb_client(config), track,
                                 body.recording_id, body.title, body.artist,
                                 move=body.move, album=body.album,
-                                release_id=body.release_id)
+                                release_id=body.release_id,
+                                position=body.position)
 
         try:
             outcome = await asyncio.to_thread(run)

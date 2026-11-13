@@ -370,8 +370,8 @@ When the exact search finds nothing, Fix match loosens it a step at a
 time - without the album; then on that album credited to anyone, since
 MusicBrainz can credit a song on an artist's album to a character, guest
 or side project where Plex shows the album artist; then the album's own
-track list; then word by word, ranked by MusicBrainz; then that title by
-anyone - and says when it did. A song found on the album is filed under
+track list; then word by word, ranked by MusicBrainz, led by that exact
+title by anyone - and says when it did. A song found on the album is filed under
 the album artist, keeping its own credit; automatic matching during a grab falls back to the
 word search too, its usual checks still applied. MusicBrainz is run by
 volunteers and newer releases can be missing outright; Plex matches
@@ -379,9 +379,10 @@ against its own catalogue, which is why it can find songs this cannot.
 
 If you can find it on musicbrainz.org but the search cannot (its search
 index can lag behind a newly added release), paste the page's link into
-the song title box instead. A release (album) link lists every track on
-it to pick from, and the track is filed under exactly that release; a
-recording link gives that one recording. Nothing is searched.
+any of the boxes instead. A release link, or an album (release group)
+link from an artist's page, lists every track on it to pick from, and
+the track is filed under exactly that release and track; a recording
+link gives that one recording. Nothing is searched.
 Tracks only for now; albums are a bigger job.
 
 ## Lyrics on their own

@@ -40,6 +40,10 @@ class MBError(RuntimeError):
     pass
 
 
+class MBNotFound(MBError):
+    """MusicBrainz has nothing at that ID (a 404 on a lookup)."""
+
+
 class MBBusy(MBError):
     """MusicBrainz is refusing for now - rate limited or overloaded -
     as distinct from saying no to the request itself."""
@@ -71,6 +75,9 @@ def _found_nothing(data) -> bool:
     for key in ("recordings", "releases"):
         if key in data and "id" not in data:
             return not data[key]
+    if "id" in data and "media" in data:
+        # A release looked up while it is still being entered: no tracks yet.
+        return not any((medium or {}).get("tracks") for medium in data["media"] or [])
     return False
 
 
@@ -137,6 +144,9 @@ class MusicBrainzClient:
             self._back_off(response, BACKOFF[attempt])
         if response.status_code in BUSY:
             raise MBBusy("MusicBrainz is busy (answered %d)" % response.status_code)
+        if response.status_code == 404:
+            # Not cached: it may be there by the next time it is asked for.
+            raise MBNotFound("MusicBrainz has nothing at that ID")
         if not response.ok:
             raise MBError("MusicBrainz answered %d" % response.status_code)
         data = response.json()
@@ -197,6 +207,12 @@ class MusicBrainzClient:
         url = "%s/release/%s?inc=recordings+artist-credits+release-groups+media&fmt=json" % (
             MB_ROOT, release_mbid)
         return self._cached_get(url)
+
+    def get_release_group_releases(self, release_group_mbid: str) -> list[dict]:
+        """The releases of a release group - the editions of one album."""
+        url = "%s/release?release-group=%s&inc=media&limit=100&fmt=json" % (
+            MB_ROOT, release_group_mbid)
+        return self._cached_get(url).get("releases", [])
 
     def get_recording(self, recording_mbid: str) -> dict:
         """One recording by its ID, with the releases it is on - shaped like
