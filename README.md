@@ -367,8 +367,12 @@ with bracketed extras still matches, so "Rumours" finds "Rumours
 out.
 
 When the exact search finds nothing, Fix match loosens it a step at a
-time - without the album, then word by word, ranked by MusicBrainz - and
-says when it did; automatic matching during a grab falls back to the
+time - without the album; then on that album credited to anyone, since
+MusicBrainz can credit a song on an artist's album to a character, guest
+or side project where Plex shows the album artist; then the album's own
+track list; then word by word, ranked by MusicBrainz; then that title by
+anyone - and says when it did. A song found on the album is filed under
+the album artist, keeping its own credit; automatic matching during a grab falls back to the
 word search too, its usual checks still applied. MusicBrainz is run by
 volunteers and newer releases can be missing outright; Plex matches
 against its own catalogue, which is why it can find songs this cannot.

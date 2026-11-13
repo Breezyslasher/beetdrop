@@ -22,6 +22,7 @@ from __future__ import annotations
 import re
 import shutil
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Optional
 
@@ -37,7 +38,14 @@ from .library import (
     place_file,
     track_filename,
 )
-from .matching import credit_ids, credit_name, select_release, select_release_for
+from .matching import (
+    credit_ids,
+    credit_name,
+    normalize,
+    releases_named,
+    select_release,
+    select_release_for,
+)
 
 AUDIO_EXTS = (".opus", ".ogg", ".mp3", ".m4a", ".flac")
 
@@ -149,33 +157,85 @@ def describe_recording(recording: dict, album: str = "") -> dict:
 
 
 # Each search a step looser than the last, tried until one finds
-# something: the exact phrases, with and without the album; then the
-# words, ranked by MusicBrainz, with and without it. A title spelled a
-# little differently there - punctuation, a "feat.", an edition - finds
-# nothing by phrase, while Plex, matching against its own catalogue,
-# found the song fine.
-_NOTES = {
-    ("exact", False): "Nothing on an album of that name - these are the song on any album.",
-    ("words", True): "No exact match - these are the closest, ranked by MusicBrainz.",
-    ("words", False): "No exact match, even without the album - these are the closest.",
-}
+# something:
+#   - the exact phrases, with the album and then without it;
+#   - the title on that album credited to anyone - a song on an artist's
+#     album can be credited on MusicBrainz to someone else: a character,
+#     a guest, a side project ("We are the Zorg" on Kyle Gordon Is
+#     Everywhere is by "Billy Mainframe") - which every search by artist
+#     misses, while Plex, going by the album artist, finds it;
+#   - the album's own track list, for a title spelled differently there;
+#   - the words, ranked by MusicBrainz, with and without the album;
+#   - the exact title by anyone at all.
+# Each step: (how, search by the artist?, search on the album?).
 
 
-def _steps(album: str) -> list:
-    steps = [("exact", album)]
+def _steps(artist: str, album: str) -> list:
+    steps = []
     if album:
-        steps.append(("exact", ""))
-    steps.append(("words", album))
+        steps.append(("exact", True, True))
+    steps.append(("exact", True, False))
+    if album and artist:
+        steps.append(("exact", False, True))
     if album:
-        steps.append(("words", ""))
+        steps.append(("tracks", True, True))
+    if album:
+        steps.append(("words", True, True))
+    steps.append(("words", True, False))
+    if artist:
+        steps.append(("exact", False, False))
     return steps
 
 
-def _search(mb, how: str, title: str, artist: str, limit: int, album: str) -> list:
+def _note(step: tuple, first: tuple, artist: str, album: str) -> str:
+    if step == first:
+        return ""
+    how, by_artist, on_album = step
+    if how == "exact" and by_artist:
+        return "Nothing on an album of that name - these are the song on any album."
+    if how == "exact" and on_album:
+        return ("Nothing credited to %s - these are on %s, credited to someone "
+                "else there." % (artist, album))
+    if how == "tracks":
+        return ("Not found by its title - these are the tracks of %s, the "
+                "closest first." % album)
+    if how == "words":
+        return ("No exact match - these are the closest, ranked by MusicBrainz."
+                if on_album else
+                "No exact match, even without the album - these are the closest.")
+    return "Nothing credited to %s - these are that title by anyone." % artist
+
+
+def _search(mb, step: tuple, title: str, artist: str, limit: int, album: str) -> list:
+    how, by_artist, on_album = step
+    artist = artist if by_artist else ""
+    album = album if on_album else ""
     if how == "exact":
         return mb.search_recordings(title, artist, limit=limit, album=album)
-    loose = getattr(mb, "search_recordings_loose", None)
-    return loose(title, artist, limit=limit, album=album) if loose else []
+    if how == "words":
+        loose = getattr(mb, "search_recordings_loose", None)
+        return loose(title, artist, limit=limit, album=album) if loose else []
+    return []
+
+
+def _album_tracks(mb, title: str, artist: str, album: str) -> list:
+    """The tracks of the album named, as candidates, the ones whose title
+    is closest first; [] when MusicBrainz has no album of that name."""
+    search = getattr(mb, "search_releases", None)
+    if search is None:
+        return []
+    named = releases_named(search(album, artist), album) if artist else []
+    if not named:
+        named = releases_named(search(album, ""), album)
+    chosen = select_release(named) if named else None
+    if chosen is None:
+        return []
+    release = mb.get_release(chosen["id"])
+    rows = [describe_release_track(release, entry) for entry in _flatten_media(release)]
+    rows = [row for row in rows if row["id"]]
+    want = normalize(title)
+    rows.sort(key=lambda row: -SequenceMatcher(None, want, normalize(row["title"])).ratio())
+    return rows
 
 
 # A MusicBrainz page pasted in place of a title: the release (album) or
@@ -246,12 +306,15 @@ def find_candidates(mb, title: str, artist: str, limit: int = 10,
     link = mb_link(title)
     if link:
         return _from_link(mb, *link)
-    for how, step_album in _steps(album):
-        found = _search(mb, how, title, artist, limit, step_album)
-        if found:
-            note = "" if (how, step_album) == ("exact", album) else \
-                _NOTES[(how, bool(step_album))]
-            return [describe_recording(row, album) for row in found], note
+    steps = _steps(artist, album)
+    for step in steps:
+        if step[0] == "tracks":
+            rows = _album_tracks(mb, title, artist, album)
+        else:
+            rows = [describe_recording(row, album)
+                    for row in _search(mb, step, title, artist, limit, album)]
+        if rows:
+            return rows, _note(step, steps[0], artist, album)
     return [], ""
 
 
@@ -330,8 +393,8 @@ def _find_recording(mb, recording_id: str, title: str, artist: str,
     """
     title, artist, album = title.strip(), artist.strip(), album.strip()
     if title and not mb_link(title):
-        for how, step_album in _steps(album):
-            for row in _search(mb, how, title, artist, 25, step_album):
+        for step in _steps(artist, album):
+            for row in _search(mb, step, title, artist, 25, album):
                 if row.get("id") == recording_id:
                     return row
     # Not offered by the search (a pasted link, or MusicBrainz ranking it

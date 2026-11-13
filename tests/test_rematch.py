@@ -541,20 +541,23 @@ class TestCandidateCoverArt:
 
 class StepMB(FakeMB):
     """MusicBrainz that finds the recording only one way: by `exact`
-    phrases with or without an album, or only by words."""
+    phrases or by `words`, with or without the artist and the album."""
 
     def __init__(self, finds, **kwargs):
         super().__init__(recordings=[ON_TWO], **kwargs)
-        self.finds = finds          # set of ("exact"|"words", with_album: bool)
+        self.finds = finds   # set of ("exact"|"words", by_artist: bool, on_album: bool)
         self.asked = []
 
+    def _ask(self, how, artist, album):
+        key = (how, bool(artist), bool(album))
+        self.asked.append(key)
+        return self.recordings if key in self.finds else []
+
     def search_recordings(self, title, artist, limit=10, album=""):
-        self.asked.append(("exact", bool(album)))
-        return self.recordings if ("exact", bool(album)) in self.finds else []
+        return self._ask("exact", artist, album)
 
     def search_recordings_loose(self, title, artist, limit=10, album=""):
-        self.asked.append(("words", bool(album)))
-        return self.recordings if ("words", bool(album)) in self.finds else []
+        return self._ask("words", artist, album)
 
 
 class TestBroadeningTheSearch:
@@ -563,24 +566,43 @@ class TestBroadeningTheSearch:
 
     def test_an_exact_hit_is_not_broadened(self):
         from beetdrop.rematch import find_candidates
-        mb = StepMB({("exact", True)})
+        mb = StepMB({("exact", True, True)})
         found, note = find_candidates(mb, "9 to 5", "Dolly Parton", album="Greatest Hits")
-        assert found and note == "" and mb.asked == [("exact", True)]
+        assert found and note == "" and mb.asked == [("exact", True, True)]
 
     def test_without_the_album_next(self):
         from beetdrop.rematch import find_candidates
-        mb = StepMB({("exact", False)})
+        mb = StepMB({("exact", True, False)})
         found, note = find_candidates(mb, "9 to 5", "Dolly Parton", album="Greatest Hitz")
         assert found and "any album" in note
-        assert mb.asked == [("exact", True), ("exact", False)]
+        assert mb.asked == [("exact", True, True), ("exact", True, False)]
+
+    def test_then_on_the_album_credited_to_anyone(self):
+        from beetdrop.rematch import find_candidates
+        mb = StepMB({("exact", False, True)})
+        found, note = find_candidates(mb, "We Are the Zorg", "Kyle Gordon",
+                                      album="Kyle Gordon Is Everywhere")
+        assert found and "credited to someone else" in note
+        assert mb.asked == [("exact", True, True), ("exact", True, False),
+                            ("exact", False, True)]
 
     def test_then_word_by_word(self):
         from beetdrop.rematch import find_candidates
-        mb = StepMB({("words", False)})
+        mb = StepMB({("words", True, False)})
         found, note = find_candidates(mb, "We Are the Zorg", "Kyle Gordon",
                                       album="Kyle Gordon Is Everywhere")
         assert found and "closest" in note
-        assert mb.asked == [("exact", True), ("exact", False), ("words", True), ("words", False)]
+        assert mb.asked == [("exact", True, True), ("exact", True, False),
+                            ("exact", False, True), ("words", True, True),
+                            ("words", True, False)]
+
+    def test_last_that_title_by_anyone(self):
+        from beetdrop.rematch import find_candidates
+        mb = StepMB({("exact", False, False)})
+        found, note = find_candidates(mb, "We Are the Zorg", "Kyle Gordon")
+        assert found and "by anyone" in note
+        assert mb.asked == [("exact", True, False), ("words", True, False),
+                            ("exact", False, False)]
 
     def test_nothing_anywhere_is_nothing(self):
         from beetdrop.rematch import find_candidates
@@ -593,7 +615,7 @@ class TestBroadeningTheSearch:
         track = music / "_review" / "Kyle Gordon - We Are the Zorg" / "track.opus"
         make_opus(track)
         config = Config(music_root=music, scratch_root=tmp_path / "s", config_dir=tmp_path / "c")
-        mb = StepMB({("words", False)}, releases={"rel-hits": HITS_RELEASE})
+        mb = StepMB({("words", True, False)}, releases={"rel-hits": HITS_RELEASE})
         outcome = apply_choice(config, mb, track, "rec-1", "9 to 5", "Dolly Parton")
         assert outcome.tags.recording_mbid == "rec-1"
 
@@ -802,3 +824,115 @@ class TestForgettingEmptyAnswersSooner:
         assert _found_nothing({"releases": [], "count": 0})
         assert not _found_nothing({"id": "x", "releases": []})   # a recording with none
         assert not _found_nothing({"recordings": [{"id": "r"}]})
+
+
+# What the real MusicBrainz answered (the probe workflow, 2026-11-13): the
+# song is on Kyle Gordon's album but credited to one of its characters.
+EVERYWHERE_ID = "21b129d3-f131-4a94-97d8-6ec692dcb45c"
+BILLY = [{"name": "Billy Mainframe", "artist": {"id": "art-billy", "name": "Billy Mainframe"}}]
+KYLE = [{"name": "Kyle Gordon", "artist": {"id": "art-kg", "name": "Kyle Gordon"}}]
+EVERYWHERE = {
+    "id": EVERYWHERE_ID, "title": "Kyle Gordon Is Everywhere", "date": "2026-10-02",
+    "status": "Official", "release-group": {"id": "rg-everywhere", "primary-type": "Album"},
+    "artist-credit": KYLE,
+    "media": [{"position": 1, "track-count": 3, "tracks": [
+        {"position": 1, "title": "Kyle Gordon Is Everywhere", "length": 90000,
+         "artist-credit": KYLE, "recording": {"id": "rec-title", "artist-credit": KYLE}},
+        {"position": 2, "title": "We are the Zorg", "length": 176000,
+         "artist-credit": BILLY, "recording": {"id": "rec-zorg", "artist-credit": BILLY}},
+        {"position": 3, "title": "Outro", "length": 60000,
+         "artist-credit": KYLE, "recording": {"id": "rec-outro", "artist-credit": KYLE}},
+    ]}],
+}
+ZORG_BY_BILLY = {
+    "id": "rec-zorg", "title": "We are the Zorg", "length": 176000, "score": 100,
+    "artist-credit": BILLY,
+    "releases": [{"id": EVERYWHERE_ID, "title": "Kyle Gordon Is Everywhere",
+                  "date": "2026-10-02", "status": "Official", "artist-credit": KYLE,
+                  "release-group": {"id": "rg-everywhere", "primary-type": "Album"}}],
+}
+
+
+class RealZorgMB:
+    """Answers the way MusicBrainz does for it: nothing by artist "Kyle
+    Gordon", the song by title (and album) alone."""
+
+    def __init__(self):
+        self.asked = []
+
+    def search_recordings(self, title, artist, limit=10, album=""):
+        self.asked.append(("exact", artist, album))
+        if artist == "Kyle Gordon" or title.lower() != "we are the zorg":
+            return []
+        if album and album != "Kyle Gordon Is Everywhere":
+            return []
+        return [ZORG_BY_BILLY]
+
+    def search_recordings_loose(self, title, artist, limit=10, album=""):
+        self.asked.append(("words", artist, album))
+        return []
+
+    def search_releases(self, album, artist, limit=10):
+        self.asked.append(("release", artist, album))
+        return [EVERYWHERE] if album.lower() == "kyle gordon is everywhere" else []
+
+    def get_release(self, mbid):
+        return EVERYWHERE if mbid == EVERYWHERE_ID else {}
+
+    def get_recording(self, mbid):
+        return ZORG_BY_BILLY if mbid == "rec-zorg" else {}
+
+
+class TestASongCreditedToSomeoneElseOnTheAlbum:
+    def test_found_on_the_album(self):
+        from beetdrop.rematch import find_candidates
+        rows, note = find_candidates(RealZorgMB(), "We Are the Zorg", "Kyle Gordon",
+                                     album="Kyle Gordon Is Everywhere")
+        assert [(r["title"], r["artist"], r["album"]) for r in rows] == [
+            ("We are the Zorg", "Billy Mainframe", "Kyle Gordon Is Everywhere")]
+        assert "credited to someone else" in note
+
+    def test_found_without_the_album_too(self):
+        from beetdrop.rematch import find_candidates
+        rows, note = find_candidates(RealZorgMB(), "We Are the Zorg", "Kyle Gordon")
+        assert [r["id"] for r in rows] == ["rec-zorg"] and "by anyone" in note
+
+    def test_a_title_spelled_differently_is_found_in_the_track_list(self):
+        from beetdrop.rematch import find_candidates
+        rows, note = find_candidates(RealZorgMB(), "We R Teh Zorgg", "Kyle Gordon",
+                                     album="Kyle Gordon Is Everywhere")
+        assert rows[0]["title"] == "We are the Zorg"           # closest first
+        assert len(rows) == 3 and all(r["release_id"] == EVERYWHERE_ID for r in rows)
+        assert "tracks of Kyle Gordon Is Everywhere" in note
+
+    def test_an_album_that_is_not_there_lists_nothing(self):
+        from beetdrop.rematch import find_candidates
+        assert find_candidates(RealZorgMB(), "Nope", "Kyle Gordon",
+                               album="Some Other Album") == ([], "")
+
+    @pytest.mark.skipif(not have_ffmpeg(), reason="needs ffmpeg")
+    def test_filed_under_kyle_gordon_as_plex_has_it(self, tmp_path):
+        config = TestApplyingAChoice()._library(tmp_path)
+        track = TestApplyingAChoice()._unverified(config, "Kyle Gordon - We Are the Zorg")
+        outcome = apply_choice(config, RealZorgMB(), track, "rec-zorg", "We Are the Zorg",
+                               "Kyle Gordon", album="Kyle Gordon Is Everywhere")
+        # The album artist folder, as Plex shows it; the song keeps its credit.
+        assert outcome.new_path == (config.music_root / "Kyle Gordon"
+                                    / "Kyle Gordon Is Everywhere (2026)"
+                                    / "02 - We are the Zorg.opus")
+        assert outcome.tags.artist == "Billy Mainframe"
+        assert outcome.tags.album_artist == "Kyle Gordon"
+
+    def test_an_empty_artist_is_left_out_of_the_query(self, tmp_path, monkeypatch):
+        from urllib.parse import unquote
+
+        from beetdrop.mb import MusicBrainzClient
+        client = MusicBrainzClient(tmp_path / "mb.sqlite3")
+        urls = []
+        monkeypatch.setattr(client, "_cached_get",
+                            lambda url: urls.append(unquote(url)) or {"recordings": []})
+        client.search_recordings("We Are the Zorg", "", album="Kyle Gordon Is Everywhere")
+        client.search_releases("Kyle Gordon Is Everywhere", "")
+        client.close()
+        assert 'artist:' not in urls[0] and 'artist:' not in urls[1]
+        assert 'recording:"We Are the Zorg" AND release:"Kyle Gordon Is Everywhere"' in urls[0]
