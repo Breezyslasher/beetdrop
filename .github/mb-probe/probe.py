@@ -27,9 +27,12 @@ ALBUM = os.environ.get("PROBE_ALBUM") or "Kyle Gordon Is Everywhere"
 
 
 def raw(path):
-    time.sleep(1.2)
     url = "%s/%s" % (MB_ROOT, path)
-    response = requests.get(url, timeout=30, headers={"User-Agent": USER_AGENT})
+    for wait in (1.5, 5, 15, 30):
+        time.sleep(wait)
+        response = requests.get(url, timeout=30, headers={"User-Agent": USER_AGENT})
+        if response.status_code != 503:
+            break
     print("    GET %s -> %d" % (url, response.status_code))
     return response.json() if response.ok else {}
 

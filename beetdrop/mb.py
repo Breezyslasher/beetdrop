@@ -153,8 +153,9 @@ class MusicBrainzClient:
 
     def search_recordings(self, title: str, artist: str, limit: int = 10,
                           album: str = "") -> list[dict]:
-        query = 'recording:"%s" AND artist:"%s"' % (
-            _lucene_escape(title), _lucene_escape(artist))
+        query = 'recording:"%s"' % _lucene_escape(title)
+        if artist.strip():
+            query += ' AND artist:"%s"' % _lucene_escape(artist)
         if album:
             # Recordings that appear on a release of that name - the way
             # to tell the album cut from the single, live or compilation
@@ -185,8 +186,9 @@ class MusicBrainzClient:
         return self._cached_get(url).get("recordings", [])
 
     def search_releases(self, album: str, artist: str, limit: int = 10) -> list[dict]:
-        query = 'release:"%s" AND artist:"%s"' % (
-            _lucene_escape(album), _lucene_escape(artist))
+        query = 'release:"%s"' % _lucene_escape(album)
+        if artist.strip():
+            query += ' AND artist:"%s"' % _lucene_escape(artist)
         url = "%s/release?query=%s&limit=%d&fmt=json" % (
             MB_ROOT, quote(query), limit)
         return self._cached_get(url).get("releases", [])

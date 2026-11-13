@@ -1,13 +1,15 @@
 name: MusicBrainz probe
 
 # A diagnostic, not a build: asks the real MusicBrainz for one song the
-# ways Beetdrop does and prints the answers. Runs when the probe changes,
-# or by hand with a song of your choosing.
+# ways Beetdrop does and prints the answers. Runs when the probe or the
+# MusicBrainz search code changes, or by hand with a song of your choosing.
 on:
   push:
     paths:
       - '.github/mb-probe/**'
       - '.github/workflows/mb-probe.yml'
+      - 'beetdrop/mb.py'
+      - 'beetdrop/rematch.py'
   workflow_dispatch:
     inputs:
       title:
