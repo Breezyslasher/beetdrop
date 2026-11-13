@@ -1,0 +1,36 @@
+name: MusicBrainz probe
+
+# A diagnostic, not a build: asks the real MusicBrainz for one song the
+# ways Beetdrop does and prints the answers. Runs when the probe changes,
+# or by hand with a song of your choosing.
+on:
+  push:
+    paths:
+      - '.github/mb-probe/**'
+      - '.github/workflows/mb-probe.yml'
+  workflow_dispatch:
+    inputs:
+      title:
+        description: Song title
+        default: We Are the Zorg
+      artist:
+        description: Artist
+        default: Kyle Gordon
+      album:
+        description: Album
+        default: Kyle Gordon Is Everywhere
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: python .github/mb-probe/probe.py
+        env:
+          PROBE_TITLE: ${{ inputs.title }}
+          PROBE_ARTIST: ${{ inputs.artist }}
+          PROBE_ALBUM: ${{ inputs.album }}
