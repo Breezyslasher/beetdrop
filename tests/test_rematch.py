@@ -16,6 +16,7 @@ from beetdrop.app import create_app
 from beetdrop.config import Config
 from beetdrop.backfill import read_track_meta
 from beetdrop.fulltags import FullTags, write_full_tags
+from beetdrop.mb import MBNotFound
 from beetdrop.rematch import (
     apply_choice,
     describe_recording,
@@ -594,13 +595,13 @@ class TestBroadeningTheSearch:
         assert found and "closest" in note
         assert mb.asked == [("exact", True, True), ("exact", True, False),
                             ("exact", False, True), ("words", True, True),
-                            ("words", True, False)]
+                            ("words", True, False), ("exact", False, False)]
 
-    def test_last_that_title_by_anyone(self):
+    def test_last_the_words_led_by_that_title_by_anyone(self):
         from beetdrop.rematch import find_candidates
         mb = StepMB({("exact", False, False)})
-        found, note = find_candidates(mb, "We Are the Zorg", "Kyle Gordon")
-        assert found and "by anyone" in note
+        found, _note = find_candidates(mb, "We Are the Zorg", "Kyle Gordon")
+        assert found
         assert mb.asked == [("exact", True, False), ("words", True, False),
                             ("exact", False, False)]
 
@@ -636,6 +637,7 @@ class TestBroadeningTheSearch:
 
 ZORG_RELEASE_ID = "1b2c3d4e-0000-4000-8000-00000000abcd"
 ZORG_RECORDING_ID = "9a8b7c6d-0000-4000-8000-00000000beef"
+ZORG_GROUP_ID = "5e6f7a8b-0000-4000-8000-00000000cafe"
 ZORG_RELEASE = {
     "id": ZORG_RELEASE_ID, "title": "Kyle Gordon Is Everywhere", "date": "2024-08-09",
     "release-group": {"id": "rg-zorg"},
@@ -647,10 +649,21 @@ ZORG_RELEASE = {
          "recording": {"id": ZORG_RECORDING_ID, "title": "We Are the Zorg"}},
     ]}],
 }
+# A decoy: the single comes out first and is what matching would pick, so
+# a pick from the album's track list only lands on the album if the
+# release it was picked from is honoured.
+ZORG_SINGLE = {
+    "id": "single-1", "title": "We Are the Zorg", "date": "2024-03-01", "status": "Official",
+    "release-group": {"id": "rg-single", "primary-type": "Single"},
+    "artist-credit": [{"name": "Kyle Gordon", "artist": {"id": "art-kg", "name": "Kyle Gordon"}}],
+    "media": [{"position": 1, "track-count": 1, "tracks": [
+        {"position": 1, "title": "We Are the Zorg", "length": 201000,
+         "recording": {"id": ZORG_RECORDING_ID, "title": "We Are the Zorg"}}]}],
+}
 ZORG_RECORDING = {
     "id": ZORG_RECORDING_ID, "title": "We Are the Zorg", "length": 201000,
     "artist-credit": [{"name": "Kyle Gordon", "artist": {"id": "art-kg", "name": "Kyle Gordon"}}],
-    "releases": [dict(ZORG_RELEASE, media=[])],
+    "releases": [dict(ZORG_SINGLE, media=[]), dict(ZORG_RELEASE, media=[])],
 }
 
 
@@ -668,11 +681,23 @@ class LinkMB(FakeMB):
 
     def get_release(self, mbid):
         self.looked_up.append(("release", mbid))
-        return ZORG_RELEASE if mbid == ZORG_RELEASE_ID else {}
+        found = {ZORG_RELEASE_ID: ZORG_RELEASE, "single-1": ZORG_SINGLE}.get(mbid)
+        if found is None:
+            raise MBNotFound("MusicBrainz has nothing at that ID")
+        return found
+
+    def get_release_group_releases(self, mbid):
+        self.looked_up.append(("release-group", mbid))
+        if mbid != ZORG_GROUP_ID:
+            raise MBNotFound("MusicBrainz has nothing at that ID")
+        return [dict(ZORG_RELEASE, status="Official",
+                     **{"release-group": {"id": ZORG_GROUP_ID, "primary-type": "Album"}})]
 
     def get_recording(self, mbid):
         self.looked_up.append(("recording", mbid))
-        return ZORG_RECORDING if mbid == ZORG_RECORDING_ID else {}
+        if mbid != ZORG_RECORDING_ID:
+            raise MBNotFound("MusicBrainz has nothing at that ID")
+        return ZORG_RECORDING
 
 
 class TestPastingAMusicBrainzLink:
@@ -708,11 +733,42 @@ class TestPastingAMusicBrainzLink:
         assert [r["id"] for r in rows] == [ZORG_RECORDING_ID]
         assert mb.searches == []
 
-    def test_a_link_to_nothing_finds_nothing(self):
+    def test_a_link_to_nothing_says_so(self):
         from beetdrop.rematch import find_candidates
-        rows, _ = find_candidates(
-            LinkMB(), "https://musicbrainz.org/recording/%s" % ZORG_RELEASE_ID, "")
-        assert rows == []
+        for kind in ("recording", "release", "release-group"):
+            rows, note = find_candidates(
+                LinkMB(), "https://musicbrainz.org/%s/%s" % (kind, "0" * 8 + "-0000-4000-8000-" + "0" * 12), "")
+            assert rows == [] and "check the link" in note, kind
+
+    def test_an_album_page_link_lists_its_release(self):
+        from beetdrop.rematch import find_candidates
+        rows, note = find_candidates(
+            LinkMB(), "https://musicbrainz.org/release-group/%s" % ZORG_GROUP_ID, "")
+        assert [r["title"] for r in rows] == ["Intro", "We Are the Zorg"]
+        assert rows[0]["release_id"] == ZORG_RELEASE_ID and "tracks of" in note
+
+    def test_a_link_in_another_box_is_used(self):
+        from beetdrop.rematch import find_candidates
+        mb = LinkMB()
+        rows, _ = find_candidates(mb, "We Are the Zorg", "Kyle Gordon",
+                                  album="https://musicbrainz.org/release/%s" % ZORG_RELEASE_ID)
+        assert len(rows) == 2 and mb.searches == []
+
+    def test_another_kind_of_musicbrainz_link_is_explained(self):
+        from beetdrop.rematch import find_candidates
+        mb = LinkMB()
+        rows, note = find_candidates(
+            mb, "https://musicbrainz.org/artist/%s" % ZORG_RELEASE_ID, "")
+        assert rows == [] and "not a release, album or recording" in note
+        assert mb.searches == []
+
+    def test_a_recording_link_shows_the_album_named(self):
+        from beetdrop.rematch import find_candidates
+        link = "https://musicbrainz.org/recording/%s" % ZORG_RECORDING_ID
+        rows, _ = find_candidates(LinkMB(), link, "", album="Kyle Gordon Is Everywhere")
+        assert rows[0]["album"] == "Kyle Gordon Is Everywhere"
+        rows, _ = find_candidates(LinkMB(), link, "")
+        assert rows[0]["album"] == "We Are the Zorg"     # the single, by the usual rule
 
     @pytest.mark.skipif(not have_ffmpeg(), reason="needs ffmpeg")
     def test_a_track_picked_from_a_release_is_filed_under_it(self, tmp_path):
@@ -735,7 +791,8 @@ class TestPastingAMusicBrainzLink:
         track = TestApplyingAChoice()._unverified(config, "Kyle Gordon - We Are the Zorg")
         link = "https://musicbrainz.org/recording/%s" % ZORG_RECORDING_ID
         mb = LinkMB()
-        outcome = apply_choice(config, mb, track, ZORG_RECORDING_ID, link, "")
+        outcome = apply_choice(config, mb, track, ZORG_RECORDING_ID, link, "",
+                               album="Kyle Gordon Is Everywhere")
         assert outcome.tags.title == "We Are the Zorg"
         assert outcome.tags.album == "Kyle Gordon Is Everywhere"
         assert mb.searches == []
@@ -763,7 +820,52 @@ class TestPastingAMusicBrainzLink:
             body = client.post("/api/match/apply", json={
                 "path": str(track), "recording_id": pick["id"], "title": link,
                 "artist": "", "release_id": pick["release_id"]}).json()
-        assert body["ok"] and body["path"].endswith("02 - We Are the Zorg.opus")
+        assert body["ok"]
+        assert body["path"].endswith("Kyle Gordon Is Everywhere (2024)/02 - We Are the Zorg.opus")
+
+    @pytest.mark.skipif(not have_ffmpeg(), reason="needs ffmpeg")
+    def test_the_very_copy_picked_when_a_recording_is_on_the_release_twice(self, tmp_path):
+        from beetdrop.rematch import find_candidates
+        twice = {
+            "id": ZORG_RELEASE_ID, "title": "Kyle Gordon Is Everywhere", "date": "2024-08-09",
+            "release-group": {"id": "rg-zorg"}, "artist-credit": ZORG_RELEASE["artist-credit"],
+            "media": [
+                {"position": 1, "track-count": 1, "tracks": [
+                    {"position": 1, "title": "Intro", "recording": {"id": "rec-intro"}}]},
+                {"position": 2, "track-count": 2, "tracks": [
+                    {"position": 1, "title": "Bonus", "recording": {"id": "rec-bonus"}},
+                    {"position": 2, "title": "Intro", "recording": {"id": "rec-intro"}}]},
+            ],
+        }
+
+        class TwiceMB(LinkMB):
+            def get_release(self, mbid):
+                return twice
+
+        rows, _ = find_candidates(TwiceMB(), "https://musicbrainz.org/release/%s"
+                                  % ZORG_RELEASE_ID, "")
+        assert [r["position"] for r in rows] == ["1-1", "2-1", "2-2"]
+        config = TestApplyingAChoice()._library(tmp_path)
+        track = TestApplyingAChoice()._unverified(config, "Kyle Gordon - Intro")
+        outcome = apply_choice(config, TwiceMB(), track, "rec-intro", "Intro", "",
+                               release_id=ZORG_RELEASE_ID, position="2-2")
+        assert outcome.tags.disc_number == 2 and outcome.tags.track_number == 2
+        assert outcome.new_path.name == "2-02 - Intro.opus"
+
+    @pytest.mark.skipif(not have_ffmpeg(), reason="needs ffmpeg")
+    def test_a_busy_musicbrainz_is_not_called_a_missing_recording(self, tmp_path):
+        from beetdrop.mb import MBBusy
+
+        class BusyMB(LinkMB):
+            def get_recording(self, mbid):
+                raise MBBusy("MusicBrainz is busy (answered 503)")
+
+        config = TestApplyingAChoice()._library(tmp_path)
+        track = TestApplyingAChoice()._unverified(config)
+        with pytest.raises(MBBusy):
+            apply_choice(config, BusyMB(), track, ZORG_RECORDING_ID,
+                         "https://musicbrainz.org/recording/%s" % ZORG_RECORDING_ID, "")
+        assert track.is_file()
 
 
 class TestForgettingEmptyAnswersSooner:
@@ -818,12 +920,37 @@ class TestForgettingEmptyAnswersSooner:
         assert client.search_recordings("Zorg", "Kyle Gordon") == [{"id": "r"}]
         assert len(calls) == 1
 
+    def test_a_404_is_said_and_not_remembered(self, tmp_path, monkeypatch):
+        import beetdrop.mb as mb_module
+        from beetdrop.rematch import find_candidates
+
+        calls = []
+
+        class NotFound:
+            status_code = 404
+            ok = False
+            headers = {}
+
+        monkeypatch.setattr(mb_module.requests, "get",
+                            lambda url, **kw: calls.append(url) or NotFound())
+        monkeypatch.setattr(mb_module, "MIN_INTERVAL", 0)
+        client = mb_module.MusicBrainzClient(tmp_path / "cache.db")
+        link = "https://musicbrainz.org/release/%s" % ZORG_RELEASE_ID
+        for _ in range(2):
+            rows, note = find_candidates(client, link, "")
+            assert rows == [] and "check the link" in note
+        assert len(calls) == 2                        # asked again, not cached
+        client.close()
+
     def test_a_looked_up_page_is_not_mistaken_for_an_empty_search(self):
         from beetdrop.mb import _found_nothing
         assert _found_nothing({"recordings": []})
         assert _found_nothing({"releases": [], "count": 0})
         assert not _found_nothing({"id": "x", "releases": []})   # a recording with none
         assert not _found_nothing({"recordings": [{"id": "r"}]})
+        # A release still being entered, with no tracks yet, is asked again soon.
+        assert _found_nothing({"id": "x", "media": [{"tracks": []}]})
+        assert not _found_nothing({"id": "x", "media": [{"tracks": [{"id": "t"}]}]})
 
 
 # What the real MusicBrainz answered (the probe workflow, 2026-11-13): the
@@ -896,6 +1023,20 @@ class TestASongCreditedToSomeoneElseOnTheAlbum:
         from beetdrop.rematch import find_candidates
         rows, note = find_candidates(RealZorgMB(), "We Are the Zorg", "Kyle Gordon")
         assert [r["id"] for r in rows] == ["rec-zorg"] and "by anyone" in note
+
+    def test_ahead_of_the_word_search_noise(self):
+        # The real word search answers ten unrelated "Gordon" and "We Are"
+        # songs; the exact title by anyone goes first.
+        from beetdrop.rematch import find_candidates
+
+        class Noisy(RealZorgMB):
+            def search_recordings_loose(self, title, artist, limit=10, album=""):
+                return [{"id": "rec-noise-%d" % n, "title": "Here We Are",
+                         "artist-credit": [{"name": "Gordon"}]} for n in range(10)]
+
+        rows, note = find_candidates(Noisy(), "We Are the Zorg", "Kyle Gordon")
+        assert rows[0]["id"] == "rec-zorg" and len(rows) == 10
+        assert "by anyone" in note
 
     def test_a_title_spelled_differently_is_found_in_the_track_list(self):
         from beetdrop.rematch import find_candidates

@@ -1247,7 +1247,7 @@ const app = createApp({
         track.candidates = body.candidates || [];
         track.searchNote = body.note || "";
         if (!track.candidates.length) {
-          this.showToast("MusicBrainz returned nothing for that");
+          this.showToast(body.note || "MusicBrainz returned nothing for that");
         }
       } catch (err) {
         if (err.message !== "password required") {
@@ -1268,6 +1268,7 @@ const app = createApp({
             title: track.query, artist: track.queryArtist,
             album: track.queryAlbum || "", move: track.move,
             release_id: candidate.release_id || "",
+            position: candidate.position || "",
           }),
         });
         this.showToast(body.detail || "filed");
