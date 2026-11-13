@@ -589,7 +589,8 @@
         </p>
         <p class="note">{{ track.album ? track.album + ' / ' : '' }}{{ track.name }}</p>
         <input type="search" v-model="track.queryArtist" placeholder="artist">
-        <input type="search" v-model="track.query" placeholder="song title"
+        <input type="search" v-model="track.query"
+               placeholder="song title, or a MusicBrainz link"
                @keyup.enter="findMatches(track)">
         <input type="search" v-model="track.queryAlbum"
                placeholder="album (optional)" @keyup.enter="findMatches(track)">
@@ -604,13 +605,13 @@
         <p class="note" v-if="track.searchNote && track.candidates && track.candidates.length">
           {{ track.searchNote }}
         </p>
-        <button v-for="c in (track.candidates || [])" :key="c.id"
+        <button v-for="(c, i) in (track.candidates || [])" :key="c.id + ':' + i"
                 type="button" class="candidate"
                 :disabled="fixingMatch === track.path"
                 @click="applyMatch(track, c)">
           <img v-if="c.artwork" class="candidateart" :src="c.artwork" alt=""
                loading="lazy" @error="hideImage">
-          {{ c.artist }} &mdash; {{ c.title }}
+          <template v-if="c.position">{{ c.position }}. </template>{{ c.artist }} &mdash; {{ c.title }}
           <span class="note">
             {{ c.album }}{{ c.year ? ' (' + c.year + ')' : '' }},
             {{ fmtDuration(c.duration) }}<template v-if="c.release_count > 1">
@@ -621,7 +622,9 @@
           MusicBrainz has nothing like it, even searching word by word. It
           may not have this song yet - it is run by volunteers, and newer
           releases can be missing. Plex matches against its own catalogue,
-          which is why it can find songs this cannot.
+          which is why it can find songs this cannot. If you can find it on
+          musicbrainz.org, paste the link to its album (release) page in
+          the song title box: every track on it is listed to pick from.
         </p>
       </div>
       <p class="note" v-if="unverifiedTotal > unverified.length">

@@ -26,6 +26,10 @@ MB_ROOT = "https://musicbrainz.org/ws/2"
 CAA_ROOT = "https://coverartarchive.org"
 MIN_INTERVAL = 1.1
 CACHE_TTL = 30 * 24 * 3600
+# A search that found nothing is asked again after an hour, not a month:
+# music is added to MusicBrainz all the time, and its search index can
+# take a while to catch up with a newly added release.
+EMPTY_TTL = 3600
 TIMEOUT = 20
 
 USER_AGENT = "%s/%s (+https://github.com/Breezyslasher/Youtube-Music-DL)" % (
@@ -58,6 +62,16 @@ def _lucene_escape(text: str) -> str:
             out.append("\\")
         out.append(ch)
     return "".join(out)
+
+
+def _found_nothing(data) -> bool:
+    """A search answer with no results in it."""
+    if not isinstance(data, dict):
+        return False
+    for key in ("recordings", "releases"):
+        if key in data and "id" not in data:
+            return not data[key]
+    return False
 
 
 class MusicBrainzClient:
@@ -106,8 +120,11 @@ class MusicBrainzClient:
             row = self._db.execute(
                 "SELECT value, fetched_at FROM mb_cache WHERE key = ?", (url,)
             ).fetchone()
-        if row and time.time() - row[1] <= CACHE_TTL:
-            return json.loads(row[0])
+        if row:
+            cached = json.loads(row[0])
+            ttl = EMPTY_TTL if _found_nothing(cached) else CACHE_TTL
+            if time.time() - row[1] <= ttl:
+                return cached
         for attempt in range(len(BACKOFF) + 1):
             self._gate()
             try:
@@ -177,6 +194,13 @@ class MusicBrainzClient:
     def get_release(self, release_mbid: str) -> dict:
         url = "%s/release/%s?inc=recordings+artist-credits+release-groups+media&fmt=json" % (
             MB_ROOT, release_mbid)
+        return self._cached_get(url)
+
+    def get_recording(self, recording_mbid: str) -> dict:
+        """One recording by its ID, with the releases it is on - shaped like
+        a search result, so it can stand in for one."""
+        url = ("%s/recording/%s?inc=artist-credits+releases+release-groups+media"
+               "&fmt=json" % (MB_ROOT, recording_mbid))
         return self._cached_get(url)
 
     # -- cover art (best effort, not rate limited by MB rules) -------------

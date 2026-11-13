@@ -19,6 +19,7 @@ them rather than filtered by the checks that got it wrong.
 
 from __future__ import annotations
 
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -177,6 +178,59 @@ def _search(mb, how: str, title: str, artist: str, limit: int, album: str) -> li
     return loose(title, artist, limit=limit, album=album) if loose else []
 
 
+# A MusicBrainz page pasted in place of a title: the release (album) or
+# recording a person already found there, so nothing need be searched.
+_MB_LINK = re.compile(
+    r"musicbrainz\.org/(release|recording)/"
+    r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", re.I)
+
+
+def mb_link(text: str) -> Optional[tuple]:
+    """("release" | "recording", its ID) for a MusicBrainz link, else None."""
+    found = _MB_LINK.search(text or "")
+    return (found.group(1).lower(), found.group(2).lower()) if found else None
+
+
+def describe_release_track(release: dict, entry: dict) -> dict:
+    """describe_recording for one track of a release, which picking files
+    under exactly that release."""
+    track = entry["track"]
+    recording = track.get("recording") or {}
+    credit = (track.get("artist-credit") or recording.get("artist-credit")
+              or release.get("artist-credit"))
+    millis = track.get("length") or recording.get("length") or 0
+    release_mbid = release.get("id") or ""
+    position = track.get("position") or track.get("number") or ""
+    if entry.get("disc_total", 1) > 1 and position:
+        position = "%s-%s" % (entry.get("disc_number", 1), position)
+    return {
+        "id": recording.get("id") or "",
+        "title": track.get("title") or recording.get("title") or "",
+        "artist": credit_name(credit) or "",
+        "album": release.get("title") or "",
+        "year": _release_date(release)[:4],
+        "duration": int(millis / 1000) if millis else 0,
+        "release_count": 1,
+        "release_id": release_mbid,
+        "position": str(position),
+        "artwork": ("https://coverartarchive.org/release/%s/front-250"
+                    % release_mbid) if release_mbid else "",
+    }
+
+
+def _from_link(mb, kind: str, mbid: str) -> tuple:
+    if kind == "release":
+        release = mb.get_release(mbid)
+        rows = [describe_release_track(release, entry)
+                for entry in _flatten_media(release)]
+        rows = [row for row in rows if row["id"]]
+        note = ("Every track on %s - pick this one." % (release.get("title") or "that release")
+                if rows else "That release lists no tracks on MusicBrainz.")
+        return rows, note
+    recording = mb.get_recording(mbid)
+    return ([describe_recording(recording)] if recording.get("id") else []), ""
+
+
 def find_candidates(mb, title: str, artist: str, limit: int = 10,
                     album: str = "") -> tuple:
     """([what MusicBrainz has for this text, unfiltered], a note when the
@@ -189,6 +243,9 @@ def find_candidates(mb, title: str, artist: str, limit: int = 10,
     title, artist, album = title.strip(), artist.strip(), album.strip()
     if not title:
         return [], ""
+    link = mb_link(title)
+    if link:
+        return _from_link(mb, *link)
     for how, step_album in _steps(album):
         found = _search(mb, how, title, artist, limit, step_album)
         if found:
@@ -272,16 +329,37 @@ def _find_recording(mb, recording_id: str, title: str, artist: str,
     from moments ago when a person was reading it.
     """
     title, artist, album = title.strip(), artist.strip(), album.strip()
-    for how, step_album in _steps(album):
-        for row in _search(mb, how, title, artist, 25, step_album):
-            if row.get("id") == recording_id:
-                return row
-    return None
+    if title and not mb_link(title):
+        for how, step_album in _steps(album):
+            for row in _search(mb, how, title, artist, 25, step_album):
+                if row.get("id") == recording_id:
+                    return row
+    # Not offered by the search (a pasted link, or MusicBrainz ranking it
+    # differently this time): look it up by its ID instead.
+    lookup = getattr(mb, "get_recording", None)
+    if lookup is None:
+        return None
+    try:
+        row = lookup(recording_id)
+    except Exception:
+        return None
+    return row if row.get("id") == recording_id else None
+
+
+def _tags_on_release(mb, release_id: str, recording_id: str,
+                     fallback_title: str, fallback_artist: str) -> FullTags:
+    """Tags for a track of the release a person picked it from."""
+    release = mb.get_release(release_id)
+    for entry in _flatten_media(release):
+        if (entry["track"].get("recording") or {}).get("id") == recording_id:
+            return _tags_from_release_track(release, entry, fallback_title,
+                                            fallback_artist)
+    raise LookupError("that recording is not on that release")
 
 
 def apply_choice(config: Config, mb, path: Path, recording_id: str,
                  title: str, artist: str, move: bool = True,
-                 album: str = "") -> Rematch:
+                 album: str = "", release_id: str = "") -> Rematch:
     """Re-tag this file as the chosen recording and re-file it.
 
     Moving is the default because a wrong match is not only wrong tags:
@@ -301,11 +379,16 @@ def apply_choice(config: Config, mb, path: Path, recording_id: str,
     """
     if not path.is_file():
         raise FileNotFoundError("that file is gone")
-    recording = _find_recording(mb, recording_id, title, artist, album)
-    if recording is None:
-        raise LookupError("MusicBrainz no longer offers that recording")
-
-    tags, _release = _tags_for(mb, recording, title, artist, album.strip())
+    if mb_link(title):
+        title = ""      # a link, not a name to fall back on
+    if release_id:
+        # Picked from a release's track list: filed under that release.
+        tags = _tags_on_release(mb, release_id, recording_id, title, artist)
+    else:
+        recording = _find_recording(mb, recording_id, title, artist, album)
+        if recording is None:
+            raise LookupError("MusicBrainz no longer offers that recording")
+        tags, _release = _tags_for(mb, recording, title, artist, album.strip())
     old_title = _current_title(path)
     if not move:
         write_full_tags(path, tags)
