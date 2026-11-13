@@ -147,20 +147,60 @@ def describe_recording(recording: dict, album: str = "") -> dict:
     }
 
 
-def search_candidates(mb, title: str, artist: str, limit: int = 10,
-                      album: str = "") -> list:
-    """What MusicBrainz has for this text, unfiltered.
+# Each search a step looser than the last, tried until one finds
+# something: the exact phrases, with and without the album; then the
+# words, ranked by MusicBrainz, with and without it. A title spelled a
+# little differently there - punctuation, a "feat.", an edition - finds
+# nothing by phrase, while Plex, matching against its own catalogue,
+# found the song fine.
+_NOTES = {
+    ("exact", False): "Nothing on an album of that name - these are the song on any album.",
+    ("words", True): "No exact match - these are the closest, ranked by MusicBrainz.",
+    ("words", False): "No exact match, even without the album - these are the closest.",
+}
+
+
+def _steps(album: str) -> list:
+    steps = [("exact", album)]
+    if album:
+        steps.append(("exact", ""))
+    steps.append(("words", album))
+    if album:
+        steps.append(("words", ""))
+    return steps
+
+
+def _search(mb, how: str, title: str, artist: str, limit: int, album: str) -> list:
+    if how == "exact":
+        return mb.search_recordings(title, artist, limit=limit, album=album)
+    loose = getattr(mb, "search_recordings_loose", None)
+    return loose(title, artist, limit=limit, album=album) if loose else []
+
+
+def find_candidates(mb, title: str, artist: str, limit: int = 10,
+                    album: str = "") -> tuple:
+    """([what MusicBrainz has for this text, unfiltered], a note when the
+    search had to be loosened to find it, else "").
 
     Deliberately not scored or rejected: the automatic checks are what
     produced the wrong answer, so applying them again would hide the
     right one.
     """
-    if not title.strip():
-        return []
-    album = album.strip()
-    found = mb.search_recordings(title.strip(), artist.strip(), limit=limit,
-                                 album=album)
-    return [describe_recording(row, album) for row in found]
+    title, artist, album = title.strip(), artist.strip(), album.strip()
+    if not title:
+        return [], ""
+    for how, step_album in _steps(album):
+        found = _search(mb, how, title, artist, limit, step_album)
+        if found:
+            note = "" if (how, step_album) == ("exact", album) else \
+                _NOTES[(how, bool(step_album))]
+            return [describe_recording(row, album) for row in found], note
+    return [], ""
+
+
+def search_candidates(mb, title: str, artist: str, limit: int = 10,
+                      album: str = "") -> list:
+    return find_candidates(mb, title, artist, limit=limit, album=album)[0]
 
 
 def _tags_for(mb, recording: dict, fallback_title: str,
@@ -231,10 +271,11 @@ def _find_recording(mb, recording_id: str, title: str, artist: str,
     this to endpoints the client already has, and the response is cached
     from moments ago when a person was reading it.
     """
-    for row in mb.search_recordings(title.strip(), artist.strip(), limit=25,
-                                    album=album.strip()):
-        if row.get("id") == recording_id:
-            return row
+    title, artist, album = title.strip(), artist.strip(), album.strip()
+    for how, step_album in _steps(album):
+        for row in _search(mb, how, title, artist, 25, step_album):
+            if row.get("id") == recording_id:
+                return row
     return None
 
 

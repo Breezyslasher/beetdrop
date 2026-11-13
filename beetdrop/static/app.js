@@ -1245,6 +1245,7 @@ const app = createApp({
           + "&artist=" + encodeURIComponent(track.queryArtist)
           + "&album=" + encodeURIComponent(track.queryAlbum || ""));
         track.candidates = body.candidates || [];
+        track.searchNote = body.note || "";
         if (!track.candidates.length) {
           this.showToast("MusicBrainz returned nothing for that");
         }
